@@ -1,3 +1,4 @@
+'use client';
 import React, { useState, useRef } from 'react';
 import { Calendar, Target, TrendingUp, CheckCircle, AlertCircle, Settings, Save, Camera, Upload, Brain, Loader } from 'lucide-react';
 
@@ -129,36 +130,16 @@ const NutritionTracker = () => {
     }
   };
 
-  // Real food analysis function using GPT-5 Vision + USDA Database
-  const performRealFoodAnalysis = async (base64Image, photo) => {
-    try {
-      // Step 1: Use GPT-5 Vision to analyze the food image
-      const gptAnalysis = await analyzeImageWithGPT5(base64Image);
-      
-      // Step 2: Look up precise nutrition data from USDA database
-      const nutritionData = await lookupUSDANutrition(gptAnalysis.detectedFoods);
-      
-      // Step 3: Combine GPT-5 analysis with USDA nutrition data
-      const combinedResults = combineAnalysisResults(gptAnalysis, nutritionData);
-      
-      return combinedResults;
-      
-    } catch (error) {
-      console.error('Real food analysis failed:', error);
-      throw new Error('AI food analysis service temporarily unavailable');
-    }
-  };
-
-  // GPT-4 Vision API Integration with detailed error handling
-  const analyzeImageWithGPT5 = async (base64Image) => {
+  const analyzeImageWithGPT4 = async (base64Image) => {
     const OPENAI_API_KEY = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+    
+    if (!OPENAI_API_KEY || OPENAI_API_KEY === 'your_openai_api_key_here') {
+      throw new Error('OpenAI API key not configured. Please add NEXT_PUBLIC_OPENAI_API_KEY to your environment variables');
+    }
     
     try {
       console.log('Starting GPT-4 Vision analysis...');
       console.log('Image data length:', base64Image.length);
-      if (!OPENAI_API_KEY || OPENAI_API_KEY === 'your_openai_api_key_here') {
-  throw new Error('OpenAI API key not configured...');
-}
       
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -217,28 +198,25 @@ const NutritionTracker = () => {
         throw new Error(`GPT-4 API error: ${response.status} - ${errorData}`);
       }
 
-const data = await response.json();
+      const data = await response.json();
       console.log('Raw API response:', data);
       
       const analysisText = data.choices[0].message.content;
       console.log('Analysis text:', analysisText);
       
       try {
-        // Extract JSON from markdown code blocks if present
         let jsonText = analysisText;
         
-        if (analysisText.includes('```
-          jsonText = analysisText.split('```json').split('```
+        if (analysisText.includes('```json')) {
+          jsonText = analysisText.split('```json')[1].split('```')[0].trim();
         } else if (analysisText.includes('```')) {
-          jsonText = analysisText.split('``````')[0].trim();
+          jsonText = analysisText.split('```')[1].split('```')[0].trim();
         }
         
-        // Remove any remaining backticks or whitespace
         jsonText = jsonText.replace(/^`+|`+$/g, '').trim();
         
         console.log('Cleaned JSON text:', jsonText);
         
-        // Parse the JSON response from GPT-4
         const analysis = JSON.parse(jsonText);
         console.log('Parsed analysis:', analysis);
         return analysis;
@@ -246,22 +224,6 @@ const data = await response.json();
         console.error('Failed to parse GPT-4 response:', analysisText);
         console.error('Parse error:', parseError);
         
-        // Try to extract just the object if there's extra content
-        try {
-          const objectMatch = analysisText.match(/\{[\s\S]*\}/);
-          if (objectMatch) {
-            console.log('Attempting recovery with extracted object');
-            return JSON.parse(objectMatch[0]);
-          }
-        } catch (recoveryError) {
-          console.error('Recovery attempt failed:', recoveryError);
-        }
-        
-        throw new Error(`Invalid response format from GPT-4: ${parseError.message}`);
-      }
-
-        
-        // Try to extract just the object if there's extra content
         try {
           const objectMatch = analysisText.match(/\{[\s\S]*\}/);
           if (objectMatch) {
@@ -280,14 +242,12 @@ const data = await response.json();
     }
   };
 
-  // USDA FoodData Central API Integration (Free)
   const lookupUSDANutrition = async (detectedFoods) => {
-    const USDA_API_KEY = 'DEMO_KEY'; // You can get a free key from USDA
+    const USDA_API_KEY = process.env.NEXT_PUBLIC_USDA_API_KEY || 'DEMO_KEY';
     const nutritionResults = [];
 
     for (const food of detectedFoods) {
       try {
-        // Search for food in USDA database
         const searchResponse = await fetch(
           `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(food.name)}&pageSize=5&api_key=${USDA_API_KEY}`
         );
@@ -297,27 +257,18 @@ const data = await response.json();
         const searchData = await searchResponse.json();
         
         if (searchData.foods && searchData.foods.length > 0) {
-          // Get detailed nutrition for the best match
           const bestMatch = searchData.foods[0];
-          const detailResponse = await fetch(
-            `https://api.nal.usda.gov/fdc/v1/food/${bestMatch.fdcId}?api_key=${USDA_API_KEY}`
-          );
+          const nutrition = extractNutritionFromUSDA(bestMatch);
           
-          if (detailResponse.ok) {
-            const nutritionDetail = await detailResponse.json();
-            const nutrition = extractNutritionFromUSDA(nutritionDetail);
-            
-            nutritionResults.push({
-              foodName: food.name,
-              usdaMatch: bestMatch.description,
-              nutrition: nutrition,
-              originalFood: food
-            });
-          }
+          nutritionResults.push({
+            foodName: food.name,
+            usdaMatch: bestMatch.description,
+            nutrition: nutrition,
+            originalFood: food
+          });
         }
       } catch (error) {
         console.error(`USDA lookup failed for ${food.name}:`, error);
-        // Use estimated nutrition if USDA lookup fails
         nutritionResults.push({
           foodName: food.name,
           nutrition: getEstimatedNutrition(food.name),
@@ -330,35 +281,38 @@ const data = await response.json();
     return nutritionResults;
   };
 
-  // Extract nutrition data from USDA response
   const extractNutritionFromUSDA = (usdaFood) => {
     const nutrients = usdaFood.foodNutrients || [];
     
-    const findNutrient = (nutrientId) => {
-      const nutrient = nutrients.find(n => n.nutrient?.id === nutrientId);
-      return nutrient?.amount || 0;
+    const findNutrient = (nutrientName) => {
+      const nutrient = nutrients.find(n => 
+        n.nutrientName?.toLowerCase().includes(nutrientName.toLowerCase())
+      );
+      return nutrient?.value || 0;
     };
 
     return {
-      kcal: findNutrient(1008), // Energy (kcal)
-      protein: findNutrient(1003), // Protein
-      carbs: findNutrient(1005), // Carbohydrates
-      fat: findNutrient(1004), // Total lipid (fat)
-      fiber: findNutrient(1079), // Fiber
+      kcal: findNutrient('energy') || findNutrient('calories'),
+      protein: findNutrient('protein'),
+      carbs: findNutrient('carbohydrate'),
+      fat: findNutrient('fat'),
+      fiber: findNutrient('fiber'),
       source: 'USDA FoodData Central'
     };
   };
 
-  // Fallback nutrition estimation for foods not found in USDA
   const getEstimatedNutrition = (foodName) => {
     const estimates = {
-      // Common foods with reasonable estimates per 100g
       'chicken': { kcal: 165, protein: 31, carbs: 0, fat: 3.6 },
       'rice': { kcal: 130, protein: 2.7, carbs: 28, fat: 0.3 },
       'egg': { kcal: 155, protein: 13, carbs: 1.1, fat: 11 },
       'bread': { kcal: 265, protein: 9, carbs: 49, fat: 3.2 },
       'broccoli': { kcal: 34, protein: 2.8, carbs: 7, fat: 0.4 },
-      'banana': { kcal: 89, protein: 1.1, carbs: 23, fat: 0.3 }
+      'banana': { kcal: 89, protein: 1.1, carbs: 23, fat: 0.3 },
+      'pasta': { kcal: 131, protein: 5, carbs: 25, fat: 1.1 },
+      'beef': { kcal: 250, protein: 26, carbs: 0, fat: 15 },
+      'salmon': { kcal: 208, protein: 20, carbs: 0, fat: 13 },
+      'potato': { kcal: 77, protein: 2, carbs: 17, fat: 0.1 }
     };
 
     const lowerFoodName = foodName.toLowerCase();
@@ -368,17 +322,24 @@ const data = await response.json();
       }
     }
 
-    // Default fallback
     return { kcal: 100, protein: 5, carbs: 15, fat: 3, source: 'estimated' };
   };
 
-  // Combine GPT-5 analysis with USDA nutrition data
+  const calculatePortionMultiplier = (gptFood) => {
+    if (gptFood.estimatedWeight) {
+      return parseFloat(gptFood.estimatedWeight) / 100;
+    }
+    if (gptFood.estimatedServings) {
+      return parseFloat(gptFood.estimatedServings);
+    }
+    return 1;
+  };
+
   const combineAnalysisResults = (gptAnalysis, nutritionData) => {
     const detectedFoods = gptAnalysis.detectedFoods.map(gptFood => {
       const nutritionMatch = nutritionData.find(n => n.foodName === gptFood.name);
       
       if (nutritionMatch) {
-        // Calculate nutrition based on estimated portion
         const portionMultiplier = calculatePortionMultiplier(gptFood);
         
         return {
@@ -398,7 +359,6 @@ const data = await response.json();
         };
       }
 
-      // Fallback if no USDA match
       return {
         name: gptFood.name,
         confidence: gptFood.confidence,
@@ -417,21 +377,21 @@ const data = await response.json();
       suggestedMealType: gptAnalysis.suggestedMealType,
       totalEstimatedCalories: totalCalories,
       confidence: gptAnalysis.confidence,
-      analysisMethod: 'GPT-5 Vision + USDA Database',
+      analysisMethod: 'GPT-4 Vision + USDA Database',
       analysisNotes: gptAnalysis.analysisNotes
     };
   };
 
-  // Calculate portion multiplier based on GPT-5 estimates
-  const calculatePortionMultiplier = (gptFood) => {
-    if (gptFood.estimatedWeight) {
-      // USDA data is typically per 100g
-      return parseFloat(gptFood.estimatedWeight) / 100;
+  const performRealFoodAnalysis = async (base64Image, photo) => {
+    try {
+      const gptAnalysis = await analyzeImageWithGPT4(base64Image);
+      const nutritionData = await lookupUSDANutrition(gptAnalysis.detectedFoods);
+      const combinedResults = combineAnalysisResults(gptAnalysis, nutritionData);
+      return combinedResults;
+    } catch (error) {
+      console.error('Real food analysis failed:', error);
+      throw error;
     }
-    if (gptFood.estimatedServings) {
-      return parseFloat(gptFood.estimatedServings);
-    }
-    return 1; // Default to 1 serving
   };
 
   const analyzePhoto = async (photo) => {
@@ -486,7 +446,8 @@ const data = await response.json();
       }
       
     } catch (error) {
-      setAnalysisError('Failed to analyze photo. Please try again.');
+      console.error('Analysis error:', error);
+      setAnalysisError(error.message || 'Failed to analyze photo. Please try again.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -949,7 +910,7 @@ const data = await response.json();
                         }))}
                         className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-600"
                       >
-                        Ãƒâ€”
+                        ×
                       </button>
                     </div>
                   ))}
@@ -958,7 +919,7 @@ const data = await response.json();
               
               {newMeal.analysisResults.length > 0 && (
                 <div className="mb-4">
-                  <h4 className="text-sm font-medium text-gray-700 mb-3">Ã°Å¸Â¤â€“ AI Analysis Results:</h4>
+                  <h4 className="text-sm font-medium text-gray-700 mb-3">AI Analysis Results:</h4>
                   {newMeal.analysisResults.map((result, index) => (
                     <div key={index} className="p-4 bg-green-50 rounded-md mb-3 border border-green-200">
                       <div className="flex items-center space-x-2 mb-2">
@@ -995,7 +956,7 @@ const data = await response.json();
                                 placeholder="Food name"
                               />
                               <span className="text-green-600 text-xs bg-green-100 px-2 py-1 rounded-full">
-                                Ã°Å¸Â¤â€“ AI Detected {item.confidence ? `(${Math.round(item.confidence * 100)}%)` : ''}
+                                AI Detected {item.confidence ? `(${Math.round(item.confidence * 100)}%)` : ''}
                               </span>
                             </div>
                             <button
@@ -1154,14 +1115,14 @@ const data = await response.json();
 
         {dailyData.meals.length > 0 && (
           <div className="space-y-6">
-            <h2 className="text-xl font-semibold text-gray-900">Ã¢Â¸Â» Ã°Å¸Â¤â€“ Today's AI-Analyzed Meals</h2>
+            <h2 className="text-xl font-semibold text-gray-900">Today's Meals</h2>
             
             {dailyData.meals.map(meal => {
               const mealTotals = calculateMealTotals(meal.items);
               return (
                 <div key={meal.id} className="border-l-4 border-green-500 pl-4 py-2 bg-green-50 rounded-r-lg">
                   <div className="flex items-center space-x-2 mb-2">
-                    <h3 className="text-lg font-semibold">Ã°Å¸ÂÂ½Ã¯Â¸Â {meal.title}</h3>
+                    <h3 className="text-lg font-semibold">{meal.title}</h3>
                     <span className="text-xs bg-green-200 text-green-800 px-2 py-1 rounded-full">AI Analyzed</span>
                     <span className="text-sm text-gray-500">
                       {new Date(meal.timestamp).toLocaleTimeString('en-US', { 
@@ -1178,14 +1139,14 @@ const data = await response.json();
                       const foodName = item.customFood ? item.customFood.name : 'Unknown Food';
                       return (
                         <div key={idx} className="text-sm text-gray-700 bg-white p-2 rounded">
-                          Ã°Å¸Â¤â€“ <span className="font-medium">{foodName}</span>: {itemMacros.kcal} kcal | {itemMacros.p}g P | {itemMacros.c}g C | {itemMacros.f}g F
+                          <span className="font-medium">{foodName}</span>: {itemMacros.kcal} kcal | {itemMacros.p}g P | {itemMacros.c}g C | {itemMacros.f}g F
                         </div>
                       );
                     })}
                   </div>
                   
                   <div className="text-sm font-semibold text-green-900 bg-green-100 p-2 rounded">
-                    Ã°Å¸â€Â¢ Meal Total: {mealTotals.kcal} kcal | {mealTotals.p}g P | {mealTotals.c}g C | {mealTotals.f}g F
+                    Meal Total: {mealTotals.kcal} kcal | {mealTotals.p}g P | {mealTotals.c}g C | {mealTotals.f}g F
                   </div>
                   
                   {meal.notes && (
@@ -1215,7 +1176,7 @@ const data = await response.json();
             })}
 
             <div className="mt-8 space-y-6">
-              <h2 className="text-xl font-semibold text-gray-900">Ã¢Â¸Â» Ã°Å¸â€œÅ  Daily Summary Ã¢â‚¬â€ [{currentDate}]</h2>
+              <h2 className="text-xl font-semibold text-gray-900">Daily Summary [{currentDate}]</h2>
               
               <div className="bg-gray-50 p-4 rounded-lg">
                 <table className="w-full">
@@ -1248,16 +1209,16 @@ const data = await response.json();
                     </tr>
                     <tr className="border-t">
                       <td className="py-1 font-semibold">Total</td>
-                      <td className="py-1">Ã¢â‚¬â€</td>
+                      <td className="py-1">-</td>
                       <td className="py-1 font-semibold">{dailyData.totals.kcal}</td>
-                      <td className="py-1">Ã¢â‚¬â€</td>
+                      <td className="py-1">-</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
 
               <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                <h3 className="text-lg font-semibold text-green-900 mb-3">Ã°Å¸Å½Â¯ Daily Goals Status</h3>
+                <h3 className="text-lg font-semibold text-green-900 mb-3">Daily Goals Status</h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span>Calories:</span>
@@ -1277,7 +1238,7 @@ const data = await response.json();
 
                 <div className="mt-4 p-3 bg-green-100 rounded-md">
                   <div className="text-sm text-green-800">
-                    Ã°Å¸Â¤â€“ <span className="font-medium">AI Analysis Summary:</span> {dailyData.meals.length} meals analyzed with computer vision today
+                    <span className="font-medium">AI Analysis Summary:</span> {dailyData.meals.length} meals analyzed with computer vision today
                   </div>
                 </div>
               </div>
