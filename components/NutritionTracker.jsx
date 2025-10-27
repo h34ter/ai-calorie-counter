@@ -236,9 +236,6 @@ const data = await response.json();
         // Remove any remaining backticks or whitespace
         jsonText = jsonText.replace(/^`+|`+$/g, '').trim();
         
-        // Handle potential escaped characters
-        jsonText = jsonText.replace(/\\n/g, '\n').replace(/\\"/g, '"');
-        
         console.log('Cleaned JSON text:', jsonText);
         
         // Parse the JSON response from GPT-4
@@ -248,6 +245,21 @@ const data = await response.json();
       } catch (parseError) {
         console.error('Failed to parse GPT-4 response:', analysisText);
         console.error('Parse error:', parseError);
+        
+        // Try to extract just the object if there's extra content
+        try {
+          const objectMatch = analysisText.match(/\{[\s\S]*\}/);
+          if (objectMatch) {
+            console.log('Attempting recovery with extracted object');
+            return JSON.parse(objectMatch[0]);
+          }
+        } catch (recoveryError) {
+          console.error('Recovery attempt failed:', recoveryError);
+        }
+        
+        throw new Error(`Invalid response format from GPT-4: ${parseError.message}`);
+      }
+
         
         // Try to extract just the object if there's extra content
         try {
