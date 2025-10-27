@@ -14,10 +14,6 @@ const INITIAL_USER_CONFIG = {
   day_reset_rule: "manual_or_midnight"
 };
 
-const FOOD_CATALOG = {
-  // Empty - all food detection now relies purely on AI analysis
-};
-
 const formatFoodName = (key) => {
   return key.split('_').map(word => 
     word.charAt(0).toUpperCase() + word.slice(1)
@@ -32,6 +28,7 @@ const NutritionTracker = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [newMeal, setNewMeal] = useState({
     title: '',
+    description: '',
     items: [],
     notes: '',
     photos: [],
@@ -95,8 +92,6 @@ const NutritionTracker = () => {
           ...prev,
           photos: [...prev.photos, newPhoto]
         }));
-        
-        analyzePhoto(newPhoto);
       }, 'image/jpeg', 0.8);
     }
     
@@ -121,8 +116,6 @@ const NutritionTracker = () => {
         ...prev,
         photos: [...prev.photos, newPhoto]
       }));
-      
-      analyzePhoto(newPhoto);
     }
     
     if (fileInputRef.current) {
@@ -130,324 +123,114 @@ const NutritionTracker = () => {
     }
   };
 
-  const analyzeImageWithGPT4 = async (base64Image) => {
+  const analyzeFromDescription = async () => {
     const OPENAI_API_KEY = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
-    
     if (!OPENAI_API_KEY || OPENAI_API_KEY === 'your_openai_api_key_here') {
-      throw new Error('OpenAI API key not configured. Please add NEXT_PUBLIC_OPENAI_API_KEY to your environment variables');
+      setAnalysisError('OpenAI API key not configured.');
+      return;
     }
-    
+    setIsAnalyzing(true);
+    setAnalysisError(null);
     try {
-      console.log('Starting GPT-4 Vision analysis...');
-      console.log('Image data length:', base64Image.length);
-      
+      const desc = (newMeal.description || '').trim();
+      const photo = newMeal.photos[0] || null;
+      const base64 = photo
+        ? await new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsDataURL(photo.blob); })
+        : null;
+
+      const systemInstruction = `
+Return ONLY strict JSON, no markdown fences.
+Schema:
+{
+  "title": "short meal title",
+  "summary": "one line",
+  "totals": { "kcal": number, "protein": number, "carbs": number, "fat": number },
+  "confidence": number
+}
+All macros in grams. Estimate conservatively if unsure.
+`;
+
+      const content = [
+        { type: "text", text: systemInstruction },
+        { type: "text", text: desc || "No user description provided." }
+      ];
+      if (base64) content.push({ type: "image_url", image_url: { url: base64, detail: "high" } });
+
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${OPENAI_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: "gpt-4o",
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: `Analyze this food image and return a JSON response with the following structure:
-                  {
-                    "detectedFoods": [
-                      {
-                        "name": "Food name (specific, e.g., 'Grilled Chicken Breast')",
-                        "confidence": 0.95,
-                        "estimatedWeight": "weight in grams",
-                        "estimatedServings": 1.5,
-                        "measurementType": "cooked/servings/pieces",
-                        "portionDescription": "detailed portion description"
-                      }
-                    ],
-                    "suggestedMealType": "Breakfast/Lunch/Dinner/Snack",
-                    "confidence": 0.90,
-                    "analysisNotes": "Any additional observations"
-                  }
-                  
-                  Be as accurate as possible with food identification and portion estimation. If multiple foods are visible, include all of them.`
-                },
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: base64Image,
-                    detail: "high"
-                  }
-                }
-              ]
-            }
-          ],
-          max_tokens: 1000,
-          temperature: 0.1
+          messages: [{ role: "user", content }],
+          max_tokens: 600,
+          temperature: 0.2
         })
       });
 
-      console.log('API Response status:', response.status);
-      console.log('API Response headers:', response.headers);
-
       if (!response.ok) {
-        const errorData = await response.text();
-        console.error('API Error Response:', errorData);
-        throw new Error(`GPT-4 API error: ${response.status} - ${errorData}`);
+        const txt = await response.text();
+        throw new Error(`GPT-4 API error: ${response.status} - ${txt}`);
       }
 
       const data = await response.json();
-      console.log('Raw API response:', data);
-      
-      const analysisText = data.choices[0].message.content;
-      console.log('Analysis text:', analysisText);
-      
+      let analysisText = data.choices?.[0]?.message?.content || '';
+
+      let jsonText = analysisText;
+      if (analysisText.includes('```json')) jsonText = analysisText.split('```json')[1].split('```')[0].trim();
+      else if (analysisText.includes('```')) jsonText = analysisText.split('```')[1].split('```')[0].trim();
+      jsonText = jsonText.replace(/^`+|`+$/g, '').trim();
+
+      let parsed;
       try {
-        let jsonText = analysisText;
-        
-        if (analysisText.includes('```json')) {
-          jsonText = analysisText.split('```json')[1].split('```')[0].trim();
-        } else if (analysisText.includes('```')) {
-          jsonText = analysisText.split('```')[1].split('```')[0].trim();
-        }
-        
-        jsonText = jsonText.replace(/^`+|`+$/g, '').trim();
-        
-        console.log('Cleaned JSON text:', jsonText);
-        
-        const analysis = JSON.parse(jsonText);
-        console.log('Parsed analysis:', analysis);
-        return analysis;
-      } catch (parseError) {
-        console.error('Failed to parse GPT-4 response:', analysisText);
-        console.error('Parse error:', parseError);
-        
-        try {
-          const objectMatch = analysisText.match(/\{[\s\S]*\}/);
-          if (objectMatch) {
-            console.log('Attempting recovery with extracted object');
-            return JSON.parse(objectMatch[0]);
-          }
-        } catch (recoveryError) {
-          console.error('Recovery attempt failed:', recoveryError);
-        }
-        
-        throw new Error(`Invalid response format from GPT-4: ${parseError.message}`);
-      }
-    } catch (error) {
-      console.error('GPT-4 Vision analysis error:', error);
-      throw error;
-    }
-  };
-
-  const lookupUSDANutrition = async (detectedFoods) => {
-    const USDA_API_KEY = process.env.NEXT_PUBLIC_USDA_API_KEY || 'DEMO_KEY';
-    const nutritionResults = [];
-
-    for (const food of detectedFoods) {
-      try {
-        const searchResponse = await fetch(
-          `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(food.name)}&pageSize=5&api_key=${USDA_API_KEY}`
-        );
-        
-        if (!searchResponse.ok) continue;
-        
-        const searchData = await searchResponse.json();
-        
-        if (searchData.foods && searchData.foods.length > 0) {
-          const bestMatch = searchData.foods[0];
-          const nutrition = extractNutritionFromUSDA(bestMatch);
-          
-          nutritionResults.push({
-            foodName: food.name,
-            usdaMatch: bestMatch.description,
-            nutrition: nutrition,
-            originalFood: food
-          });
-        }
-      } catch (error) {
-        console.error(`USDA lookup failed for ${food.name}:`, error);
-        nutritionResults.push({
-          foodName: food.name,
-          nutrition: getEstimatedNutrition(food.name),
-          originalFood: food,
-          source: 'estimated'
-        });
-      }
-    }
-
-    return nutritionResults;
-  };
-
-  const extractNutritionFromUSDA = (usdaFood) => {
-    const nutrients = usdaFood.foodNutrients || [];
-    
-    const findNutrient = (nutrientName) => {
-      const nutrient = nutrients.find(n => 
-        n.nutrientName?.toLowerCase().includes(nutrientName.toLowerCase())
-      );
-      return nutrient?.value || 0;
-    };
-
-    return {
-      kcal: findNutrient('energy') || findNutrient('calories'),
-      protein: findNutrient('protein'),
-      carbs: findNutrient('carbohydrate'),
-      fat: findNutrient('fat'),
-      fiber: findNutrient('fiber'),
-      source: 'USDA FoodData Central'
-    };
-  };
-
-  const getEstimatedNutrition = (foodName) => {
-    const estimates = {
-      'chicken': { kcal: 165, protein: 31, carbs: 0, fat: 3.6 },
-      'rice': { kcal: 130, protein: 2.7, carbs: 28, fat: 0.3 },
-      'egg': { kcal: 155, protein: 13, carbs: 1.1, fat: 11 },
-      'bread': { kcal: 265, protein: 9, carbs: 49, fat: 3.2 },
-      'broccoli': { kcal: 34, protein: 2.8, carbs: 7, fat: 0.4 },
-      'banana': { kcal: 89, protein: 1.1, carbs: 23, fat: 0.3 },
-      'pasta': { kcal: 131, protein: 5, carbs: 25, fat: 1.1 },
-      'beef': { kcal: 250, protein: 26, carbs: 0, fat: 15 },
-      'salmon': { kcal: 208, protein: 20, carbs: 0, fat: 13 },
-      'potato': { kcal: 77, protein: 2, carbs: 17, fat: 0.1 }
-    };
-
-    const lowerFoodName = foodName.toLowerCase();
-    for (const [key, nutrition] of Object.entries(estimates)) {
-      if (lowerFoodName.includes(key)) {
-        return { ...nutrition, source: 'estimated' };
-      }
-    }
-
-    return { kcal: 100, protein: 5, carbs: 15, fat: 3, source: 'estimated' };
-  };
-
-  const calculatePortionMultiplier = (gptFood) => {
-    if (gptFood.estimatedWeight) {
-      return parseFloat(gptFood.estimatedWeight) / 100;
-    }
-    if (gptFood.estimatedServings) {
-      return parseFloat(gptFood.estimatedServings);
-    }
-    return 1;
-  };
-
-  const combineAnalysisResults = (gptAnalysis, nutritionData) => {
-    const detectedFoods = gptAnalysis.detectedFoods.map(gptFood => {
-      const nutritionMatch = nutritionData.find(n => n.foodName === gptFood.name);
-      
-      if (nutritionMatch) {
-        const portionMultiplier = calculatePortionMultiplier(gptFood);
-        
-        return {
-          name: gptFood.name,
-          confidence: gptFood.confidence,
-          estimatedWeight: gptFood.estimatedWeight,
-          estimatedServings: gptFood.estimatedServings,
-          measurementType: gptFood.measurementType,
-          estimatedNutrition: {
-            kcal: Math.round(nutritionMatch.nutrition.kcal * portionMultiplier),
-            protein: Math.round(nutritionMatch.nutrition.protein * portionMultiplier * 10) / 10,
-            carbs: Math.round(nutritionMatch.nutrition.carbs * portionMultiplier * 10) / 10,
-            fat: Math.round(nutritionMatch.nutrition.fat * portionMultiplier * 10) / 10
-          },
-          nutritionSource: nutritionMatch.nutrition.source || 'USDA',
-          usdaMatch: nutritionMatch.usdaMatch
-        };
+        parsed = JSON.parse(jsonText);
+      } catch (e) {
+        const m = jsonText.match(/\{[\s\S]*\}/);
+        if (m) parsed = JSON.parse(m[0]); else throw e;
       }
 
-      return {
-        name: gptFood.name,
-        confidence: gptFood.confidence,
-        estimatedWeight: gptFood.estimatedWeight,
-        estimatedServings: gptFood.estimatedServings,
-        measurementType: gptFood.measurementType,
-        estimatedNutrition: getEstimatedNutrition(gptFood.name),
-        nutritionSource: 'estimated'
+      const title = parsed.title || (desc ? desc.slice(0, 40) : 'Meal');
+      const totals = parsed.totals || {};
+      const customFood = {
+        name: parsed.summary || title,
+        kcal: Math.max(0, Math.round(Number(totals.kcal) || 0)),
+        p: Math.max(0, Math.round((Number(totals.protein) || 0) * 10) / 10),
+        c: Math.max(0, Math.round((Number(totals.carbs) || 0) * 10) / 10),
+        f: Math.max(0, Math.round((Number(totals.fat) || 0) * 10) / 10),
       };
-    });
 
-    const totalCalories = detectedFoods.reduce((sum, food) => sum + food.estimatedNutrition.kcal, 0);
+      const item = {
+        id: `item_${Date.now()}`,
+        ref: '',
+        servings: '1',
+        measured: 'servings',
+        fraction: 1,
+        aiDetected: true,
+        confidence: Math.min(0.99, Math.max(0, Number(parsed.confidence) || 0.8)),
+        customFood,
+        editable: true
+      };
 
-    return {
-      detectedFoods,
-      suggestedMealType: gptAnalysis.suggestedMealType,
-      totalEstimatedCalories: totalCalories,
-      confidence: gptAnalysis.confidence,
-      analysisMethod: 'GPT-4 Vision + USDA Database',
-      analysisNotes: gptAnalysis.analysisNotes
-    };
-  };
-
-  const performRealFoodAnalysis = async (base64Image, photo) => {
-    try {
-      const gptAnalysis = await analyzeImageWithGPT4(base64Image);
-      const nutritionData = await lookupUSDANutrition(gptAnalysis.detectedFoods);
-      const combinedResults = combineAnalysisResults(gptAnalysis, nutritionData);
-      return combinedResults;
-    } catch (error) {
-      console.error('Real food analysis failed:', error);
-      throw error;
-    }
-  };
-
-  const analyzePhoto = async (photo) => {
-    setIsAnalyzing(true);
-    setAnalysisError(null);
-    
-    try {
-      const base64 = await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.readAsDataURL(photo.blob);
-      });
-
-      const realAnalysis = await performRealFoodAnalysis(base64, photo);
-      
       setNewMeal(prev => ({
         ...prev,
-        photos: prev.photos.map(p => 
-          p.id === photo.id ? { ...p, analyzed: true } : p
-        ),
-        analysisResults: [...prev.analysisResults, {
-          photoId: photo.id,
-          ...realAnalysis
-        }]
+        title: prev.title || title,
+        items: [item],
+        analysisResults: [
+          ...prev.analysisResults,
+          {
+            photoId: newMeal.photos?.[0]?.id || null,
+            detectedFoods: [{ name: customFood.name, confidence: item.confidence, estimatedNutrition: customFood }],
+            totalEstimatedCalories: customFood.kcal,
+            suggestedMealType: prev.title || title,
+            confidence: item.confidence,
+            analysisMethod: base64 ? 'GPT-4o (text + photo)' : 'GPT-4o (text only)',
+            analysisNotes: parsed.summary || 'Generated from description'
+          }
+        ],
+        photos: prev.photos.map(p => (p.id === newMeal.photos?.[0]?.id ? { ...p, analyzed: true } : p))
       }));
-
-      if (realAnalysis.detectedFoods && realAnalysis.detectedFoods.length > 0) {
-        const newItems = realAnalysis.detectedFoods.map((food, index) => ({
-          id: `item_${Date.now()}_${index}`,
-          ref: '',
-          grams: food.estimatedWeight || '',
-          servings: food.estimatedServings || '1',
-          measured: food.measurementType || 'servings',
-          fraction: 1,
-          aiDetected: true,
-          confidence: food.confidence,
-          customFood: {
-            name: food.name,
-            kcal: food.estimatedNutrition.kcal,
-            p: food.estimatedNutrition.protein,
-            c: food.estimatedNutrition.carbs,
-            f: food.estimatedNutrition.fat
-          },
-          editable: true
-        }));
-
-        setNewMeal(prev => ({
-          ...prev,
-          items: newItems,
-          title: prev.title || realAnalysis.suggestedMealType || 'Detected Meal'
-        }));
-      }
-      
-    } catch (error) {
-      console.error('Analysis error:', error);
-      setAnalysisError(error.message || 'Failed to analyze photo. Please try again.');
+    } catch (err) {
+      console.error('Description analysis error:', err);
+      setAnalysisError(err.message || 'Failed to analyze description.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -585,12 +368,13 @@ const NutritionTracker = () => {
       notes: newMeal.notes,
       photos: newMeal.photos,
       analysisResults: newMeal.analysisResults,
-      source: 'photo'
+      source: 'manual'
     };
 
     setMeals(prev => [...prev, meal]);
     setNewMeal({
       title: '',
+      description: '',
       items: [],
       notes: '',
       photos: [],
@@ -802,7 +586,7 @@ const NutritionTracker = () => {
                   className="flex items-center space-x-2 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                 >
                   <Camera className="h-4 w-4" />
-                  <span>Capture & Analyze</span>
+                  <span>Capture</span>
                 </button>
                 <button
                   onClick={stopCamera}
@@ -817,7 +601,7 @@ const NutritionTracker = () => {
 
         {showAddMeal && (
           <div className="bg-gray-50 p-6 rounded-lg mb-6">
-            <h3 className="text-lg font-semibold mb-4">Add Meal with AI Photo Analysis</h3>
+            <h3 className="text-lg font-semibold mb-4">Add Meal</h3>
             
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">Meal Title</label>
@@ -826,13 +610,24 @@ const NutritionTracker = () => {
                 value={newMeal.title}
                 onChange={(e) => setNewMeal(prev => ({ ...prev, title: e.target.value }))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="e.g., Breakfast, Lunch, Snack (auto-filled from AI)"
+                placeholder="e.g., Breakfast, Lunch, Dinner"
+              />
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">What did you have?</label>
+              <textarea
+                value={newMeal.description}
+                onChange={(e) => setNewMeal(prev => ({ ...prev, description: e.target.value }))}
+                rows={3}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Type: 2 bananas, 200g rice, grilled chicken..."
               />
             </div>
 
             <div className="mb-6">
               <div className="flex items-center justify-between mb-3">
-                <label className="block text-sm font-medium text-gray-700">Take or Upload Food Photo</label>
+                <label className="block text-sm font-medium text-gray-700">Photo (optional)</label>
                 <div className="flex space-x-2">
                   <button
                     type="button"
@@ -861,247 +656,79 @@ const NutritionTracker = () => {
                 className="hidden"
               />
               
-              {newMeal.photos.length === 0 && (
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
-                  <Camera className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-                  <p className="text-gray-500 mb-2">Take a photo or upload an image of your food</p>
-                  <p className="text-sm text-gray-400">AI will automatically analyze the photo and estimate nutrition</p>
-                </div>
-              )}
-              
-              {isAnalyzing && (
-                <div className="flex items-center space-x-2 mb-3 p-4 bg-blue-100 rounded-md">
-                  <Loader className="h-6 w-6 text-blue-600 animate-spin" />
-                  <div>
-                    <span className="text-blue-800 font-medium">Analyzing photo with AI...</span>
-                    <p className="text-sm text-blue-600">Detecting food items and estimating nutrition</p>
-                  </div>
-                </div>
-              )}
-              
-              {analysisError && (
-                <div className="mb-3 p-3 bg-red-100 rounded-md">
-                  <span className="text-red-800">{analysisError}</span>
-                </div>
-              )}
-              
               {newMeal.photos.length > 0 && (
-                <div className="grid grid-cols-2 gap-3 mb-4">
-                  {newMeal.photos.map((photo, index) => (
-                    <div key={photo.id} className="relative">
-                      <img
-                        src={photo.url}
-                        alt={`Food photo ${index + 1}`}
-                        className="w-full h-32 object-cover rounded-md"
-                      />
-                      {photo.analyzed && (
-                        <div className="absolute top-2 left-2 bg-green-500 text-white text-xs rounded-full px-2 py-1 flex items-center space-x-1">
-                          <Brain className="h-3 w-3" />
-                          <span>AI Analyzed</span>
-                        </div>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => setNewMeal(prev => ({
-                          ...prev,
-                          photos: prev.photos.filter(p => p.id !== photo.id),
-                          analysisResults: prev.analysisResults.filter(r => r.photoId !== photo.id),
-                          items: []
-                        }))}
-                        className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-600"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              
-              {newMeal.analysisResults.length > 0 && (
                 <div className="mb-4">
-                  <h4 className="text-sm font-medium text-gray-700 mb-3">AI Analysis Results:</h4>
-                  {newMeal.analysisResults.map((result, index) => (
-                    <div key={index} className="p-4 bg-green-50 rounded-md mb-3 border border-green-200">
-                      <div className="flex items-center space-x-2 mb-2">
-                        <Brain className="h-5 w-5 text-green-600" />
-                        <span className="text-sm font-medium text-green-800">
-                          Detected Foods: {result.detectedFoods?.map(f => f.name).join(', ')}
-                        </span>
+                  <div className="flex space-x-2">
+                    {newMeal.photos.map((photo, index) => (
+                      <div key={photo.id} className="relative">
+                        <img
+                          src={photo.url}
+                          alt={`Food photo ${index + 1}`}
+                          className="w-24 h-24 object-cover rounded-md"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setNewMeal(prev => ({
+                            ...prev,
+                            photos: prev.photos.filter(p => p.id !== photo.id)
+                          }))}
+                          className="absolute top-0 right-0 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center hover:bg-red-600"
+                        >
+                          ×
+                        </button>
                       </div>
-                      <div className="text-sm text-green-700 space-y-1">
-                        <div>Estimated Total Calories: ~{result.totalEstimatedCalories} kcal</div>
-                        <div>AI Confidence: {Math.round(result.confidence * 100)}%</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {newMeal.items.length > 0 && (
-                <div className="mb-4">
-                  <h4 className="text-sm font-medium text-gray-700 mb-3">Detected Food Items (Editable):</h4>
-                  <div className="space-y-4">
-                    {newMeal.items.map((item) => {
-                      const macros = calculateItemMacros(item);
-                      const foodName = item.customFood ? item.customFood.name : 'Unknown Food';
-                      return (
-                        <div key={item.id} className="p-4 bg-white rounded-md border border-gray-200">
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center space-x-2">
-                              <input
-                                type="text"
-                                value={foodName}
-                                onChange={(e) => updateFoodItem(item.id, 'customFood', { ...item.customFood, name: e.target.value })}
-                                className="font-medium text-gray-900 border-b border-gray-300 bg-transparent focus:outline-none focus:border-blue-500"
-                                placeholder="Food name"
-                              />
-                              <span className="text-green-600 text-xs bg-green-100 px-2 py-1 rounded-full">
-                                AI Detected {item.confidence ? `(${Math.round(item.confidence * 100)}%)` : ''}
-                              </span>
-                            </div>
-                            <button
-                              onClick={() => removeFoodItem(item.id)}
-                              className="text-red-500 hover:text-red-700 text-sm"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                          
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-                            <div>
-                              <label className="block text-xs font-medium text-gray-500 mb-1">Calories</label>
-                              <input
-                                type="number"
-                                value={item.customFood?.kcal || 0}
-                                onChange={(e) => updateFoodItem(item.id, 'customFood', { 
-                                  ...item.customFood, 
-                                  kcal: parseInt(e.target.value) || 0 
-                                })}
-                                className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-xs font-medium text-gray-500 mb-1">Protein (g)</label>
-                              <input
-                                type="number"
-                                step="0.1"
-                                value={item.customFood?.p || 0}
-                                onChange={(e) => updateFoodItem(item.id, 'customFood', { 
-                                  ...item.customFood, 
-                                  p: parseFloat(e.target.value) || 0 
-                                })}
-                                className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-xs font-medium text-gray-500 mb-1">Carbs (g)</label>
-                              <input
-                                type="number"
-                                step="0.1"
-                                value={item.customFood?.c || 0}
-                                onChange={(e) => updateFoodItem(item.id, 'customFood', { 
-                                  ...item.customFood, 
-                                  c: parseFloat(e.target.value) || 0 
-                                })}
-                                className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-xs font-medium text-gray-500 mb-1">Fat (g)</label>
-                              <input
-                                type="number"
-                                step="0.1"
-                                value={item.customFood?.f || 0}
-                                onChange={(e) => updateFoodItem(item.id, 'customFood', { 
-                                  ...item.customFood, 
-                                  f: parseFloat(e.target.value) || 0 
-                                })}
-                                className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-3 mb-2">
-                            <div>
-                              <label className="block text-xs font-medium text-gray-500 mb-1">Serving Size</label>
-                              <input
-                                type="number"
-                                step="0.1"
-                                value={item.servings || 1}
-                                onChange={(e) => updateFoodItem(item.id, 'servings', e.target.value)}
-                                className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                              />
-                            </div>
-                            {item.measured === 'cooked' && (
-                              <div>
-                                <label className="block text-xs font-medium text-gray-500 mb-1">Weight (g)</label>
-                                <input
-                                  type="number"
-                                  value={item.grams || ''}
-                                  onChange={(e) => updateFoodItem(item.id, 'grams', e.target.value)}
-                                  className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                                />
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="text-sm font-medium text-blue-900 bg-blue-50 p-2 rounded">
-                            Total: {macros.kcal} kcal | {macros.p}g protein | {macros.c}g carbs | {macros.f}g fat
-                          </div>
-                        </div>
-                      );
-                    })}
+                    ))}
                   </div>
-
-                  <button
-                    onClick={() => {
-                      const newItem = {
-                        id: `manual_${Date.now()}`,
-                        ref: '',
-                        servings: '1',
-                        measured: 'servings',
-                        fraction: 1,
-                        aiDetected: false,
-                        customFood: {
-                          name: 'Manual Food Item',
-                          kcal: 0,
-                          p: 0,
-                          c: 0,
-                          f: 0
-                        },
-                        editable: true
-                      };
-                      setNewMeal(prev => ({
-                        ...prev,
-                        items: [...prev.items, newItem]
-                      }));
-                    }}
-                    className="mt-3 px-4 py-2 border border-dashed border-gray-400 rounded-md text-gray-600 hover:border-gray-600 hover:text-gray-800 transition-colors"
-                  >
-                    + Add Manual Food Item
-                  </button>
                 </div>
               )}
             </div>
 
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Additional Notes (optional)</label>
-              <textarea
-                value={newMeal.notes}
-                onChange={(e) => setNewMeal(prev => ({ ...prev, notes: e.target.value }))}
-                rows={2}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Any additional details about the meal..."
-              />
-            </div>
+            {isAnalyzing && (
+              <div className="flex items-center space-x-2 mb-4 p-4 bg-blue-100 rounded-md">
+                <Loader className="h-6 w-6 text-blue-600 animate-spin" />
+                <span className="text-blue-800 font-medium">Analyzing...</span>
+              </div>
+            )}
+
+            {analysisError && (
+              <div className="mb-4 p-3 bg-red-100 rounded-md">
+                <span className="text-red-800">{analysisError}</span>
+              </div>
+            )}
+
+            {newMeal.items.length > 0 && (
+              <div className="mb-6 p-4 bg-white rounded-md border border-gray-200">
+                <h4 className="text-sm font-medium text-gray-700 mb-3">Estimated Nutrition:</h4>
+                {newMeal.items.map((item) => {
+                  const macros = calculateItemMacros(item);
+                  const foodName = item.customFood ? item.customFood.name : 'Unknown Food';
+                  return (
+                    <div key={item.id}>
+                      <p className="font-medium text-gray-900">{foodName}</p>
+                      <p className="text-sm text-gray-600">
+                        {macros.kcal} kcal | {macros.p}g P | {macros.c}g C | {macros.f}g F
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             <div className="flex space-x-4">
+              <button
+                onClick={analyzeFromDescription}
+                disabled={!newMeal.description.trim()}
+                className="flex items-center space-x-2 px-5 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                <Brain className="h-4 w-4" />
+                <span>Analyze & Add</span>
+              </button>
               <button
                 onClick={saveMeal}
                 disabled={newMeal.items.length === 0}
                 className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
               >
-                Save AI-Analyzed Meal
+                Save Meal
               </button>
               <button
                 onClick={() => setShowAddMeal(false)}
@@ -1123,7 +750,6 @@ const NutritionTracker = () => {
                 <div key={meal.id} className="border-l-4 border-green-500 pl-4 py-2 bg-green-50 rounded-r-lg">
                   <div className="flex items-center space-x-2 mb-2">
                     <h3 className="text-lg font-semibold">{meal.title}</h3>
-                    <span className="text-xs bg-green-200 text-green-800 px-2 py-1 rounded-full">AI Analyzed</span>
                     <span className="text-sm text-gray-500">
                       {new Date(meal.timestamp).toLocaleTimeString('en-US', { 
                         hour: 'numeric', 
@@ -1148,29 +774,6 @@ const NutritionTracker = () => {
                   <div className="text-sm font-semibold text-green-900 bg-green-100 p-2 rounded">
                     Meal Total: {mealTotals.kcal} kcal | {mealTotals.p}g P | {mealTotals.c}g C | {mealTotals.f}g F
                   </div>
-                  
-                  {meal.notes && (
-                    <div className="text-xs text-gray-600 mt-2 italic">Note: {meal.notes}</div>
-                  )}
-
-                  {meal.photos && meal.photos.length > 0 && (
-                    <div className="mt-3">
-                      <div className="flex space-x-2">
-                        {meal.photos.map((photo, photoIdx) => (
-                          <div key={photo.id} className="relative">
-                            <img
-                              src={photo.url}
-                              alt={`${meal.title} photo ${photoIdx + 1}`}
-                              className="w-20 h-20 object-cover rounded-md border-2 border-green-200"
-                            />
-                            <div className="absolute top-0 right-0 bg-green-500 text-white rounded-full w-5 h-5 flex items-center justify-center">
-                              <Brain className="h-2 w-2" />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -1178,68 +781,36 @@ const NutritionTracker = () => {
             <div className="mt-8 space-y-6">
               <h2 className="text-xl font-semibold text-gray-900">Daily Summary [{currentDate}]</h2>
               
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <table className="w-full">
-                  <thead>
-                    <tr className="text-left">
-                      <th className="py-2 font-semibold">Macro</th>
-                      <th className="py-2 font-semibold">Grams</th>
-                      <th className="py-2 font-semibold">Calories</th>
-                      <th className="py-2 font-semibold">% Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td className="py-1">Protein</td>
-                      <td className="py-1">{dailyData.totals.p} g</td>
-                      <td className="py-1">{dailyData.totals.p_kcal}</td>
-                      <td className="py-1">{dailyData.totals.p_pct}%</td>
-                    </tr>
-                    <tr>
-                      <td className="py-1">Carbs</td>
-                      <td className="py-1">{dailyData.totals.c} g</td>
-                      <td className="py-1">{dailyData.totals.c_kcal}</td>
-                      <td className="py-1">{dailyData.totals.c_pct}%</td>
-                    </tr>
-                    <tr>
-                      <td className="py-1">Fat</td>
-                      <td className="py-1">{dailyData.totals.f} g</td>
-                      <td className="py-1">{dailyData.totals.f_kcal}</td>
-                      <td className="py-1">{dailyData.totals.f_pct}%</td>
-                    </tr>
-                    <tr className="border-t">
-                      <td className="py-1 font-semibold">Total</td>
-                      <td className="py-1">-</td>
-                      <td className="py-1 font-semibold">{dailyData.totals.kcal}</td>
-                      <td className="py-1">-</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                <h3 className="text-lg font-semibold text-green-900 mb-3">Daily Goals Status</h3>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span>Calories:</span>
-                    <span className="font-medium">{dailyData.totals.kcal} / {dailyData.targets.kcal} ({dailyData.remaining.kcal} remaining)</span>
+              <div className="bg-blue-50 p-6 rounded-lg border border-blue-200">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-blue-700">Total Calories</p>
+                    <p className="text-3xl font-bold text-blue-900">{dailyData.totals.kcal}</p>
+                    <p className="text-sm text-blue-600">/ {dailyData.targets.kcal} goal</p>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Protein:</span>
-                    <span className="font-medium">{dailyData.totals.p}g / {dailyData.targets.p_g}g ({Math.round(dailyData.remaining.p_g * 10) / 10}g remaining)</span>
+                  <div>
+                    <p className="text-sm text-green-700">Protein</p>
+                    <p className="text-3xl font-bold text-green-900">{dailyData.totals.p}g</p>
+                    <p className="text-sm text-green-600">/ {dailyData.targets.p_g}g goal</p>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Macro Balance:</span>
-                    <span className="font-medium">
-                      P: {dailyData.totals.p_pct}% | C: {dailyData.totals.c_pct}% | F: {dailyData.totals.f_pct}%
-                    </span>
+                  <div>
+                    <p className="text-sm text-purple-700">Carbs</p>
+                    <p className="text-3xl font-bold text-purple-900">{dailyData.totals.c}g</p>
+                    <p className="text-sm text-purple-600">/ {dailyData.targets.c_g}g goal</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-orange-700">Fat</p>
+                    <p className="text-3xl font-bold text-orange-900">{dailyData.totals.f}g</p>
+                    <p className="text-sm text-orange-600">/ {dailyData.targets.f_g}g goal</p>
                   </div>
                 </div>
-
-                <div className="mt-4 p-3 bg-green-100 rounded-md">
-                  <div className="text-sm text-green-800">
-                    <span className="font-medium">AI Analysis Summary:</span> {dailyData.meals.length} meals analyzed with computer vision today
-                  </div>
+                
+                <div className="mt-4 p-3 bg-gray-100 rounded">
+                  <p className="text-sm text-gray-700">
+                    Breakdown: <span className="font-semibold">{dailyData.totals.p_pct}% Protein</span> | 
+                    <span className="font-semibold"> {dailyData.totals.c_pct}% Carbs</span> | 
+                    <span className="font-semibold"> {dailyData.totals.f_pct}% Fat</span>
+                  </p>
                 </div>
               </div>
             </div>
