@@ -230,8 +230,8 @@ CONFIDENCE SCORING:
       }
 
       const data = await response.json();
-      console.log('Raw response text:', analysisText);
       let analysisText = data.choices?.[0]?.message?.content || '';
+      console.log('Raw response text:', analysisText);
 
            let jsonText = analysisText.trim();
       
