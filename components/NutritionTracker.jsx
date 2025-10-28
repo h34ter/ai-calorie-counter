@@ -230,20 +230,51 @@ CONFIDENCE SCORING:
       }
 
       const data = await response.json();
+      console.log('Raw response text:', analysisText);
       let analysisText = data.choices?.[0]?.message?.content || '';
 
-      let jsonText = analysisText;
-      if (analysisText.includes('```json')) jsonText = analysisText.split('```json')[1].split('```')[0].trim();
-      else if (analysisText.includes('```')) jsonText = analysisText.split('```')[1].split('```')[0].trim();
+           let jsonText = analysisText.trim();
+      
+      // Remove markdown code blocks if present
+      if (jsonText.includes('``````json')[1].split('```
+      else if (jsonText.includes('```')) jsonText = jsonText.split('``````')[0].trim();
+      
+      // Remove leading/trailing backticks
       jsonText = jsonText.replace(/^`+|`+$/g, '').trim();
 
       let parsed;
       try {
         parsed = JSON.parse(jsonText);
-      } catch (e) {
-        const m = jsonText.match(/\{[\s\S]*\}/);
-        if (m) parsed = JSON.parse(m[0]); else throw e;
+      } catch (parseError) {
+        // If JSON parse fails, try to extract JSON object from text
+        const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            parsed = JSON.parse(jsonMatch[0]);
+          } catch (e2) {
+            // Last resort: create default response from description
+            const desc = (newMeal.description || '').trim();
+            parsed = {
+              title: desc.slice(0, 40) || 'Meal',
+              summary: desc.slice(0, 80) || 'Analyzed meal',
+              totals: { kcal: 500, protein: 25, carbs: 60, fat: 15 },
+              confidence: 0.3,
+              source: 'estimated'
+            };
+          }
+        } else {
+          // Completely failed - use default
+          const desc = (newMeal.description || '').trim();
+          parsed = {
+            title: desc.slice(0, 40) || 'Meal',
+            summary: desc.slice(0, 80) || 'Analyzed meal',
+            totals: { kcal: 500, protein: 25, carbs: 60, fat: 15 },
+            confidence: 0.2,
+            source: 'estimated'
+          };
+        }
       }
+
 
       const title = parsed.title || (desc ? desc.slice(0, 40) : 'Meal');
       const totals = parsed.totals || {};
