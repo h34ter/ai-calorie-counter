@@ -138,8 +138,7 @@ const NutritionTracker = () => {
         ? await new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsDataURL(photo.blob); })
         : null;
 
-            const systemInstruction = `
-You are a precision nutrition analyzer. Your job is to extract or calculate accurate macro totals.
+      const systemInstruction = `You are a precision nutrition analyzer. Your job is to extract or calculate accurate macro totals.
 
 INPUT: User may provide ONE of:
 1. Food description (e.g., "2 bananas, 200g rice, grilled chicken breast")
@@ -169,25 +168,9 @@ USDA Reference (per standard serving as noted):
 - Almonds (1 oz ~28g): 161 kcal, 6g protein, 6g carbs, 14g fat
 - Cheese (1 oz ~28g): 113 kcal, 7g protein, 0.4g carbs, 9g fat
 
-PARSING LOGIC:
-1. Look for numbers + food names (e.g., "2 bananas" = multiply banana ref by 2)
-2. Look for "grams" or "g" notation (e.g., "200g rice" = scale rice reference by quantity)
-3. Look for label-style text (e.g., "per 100g: 320 kcal..." or "Nutrition: 15g protein")
-4. If quantities unclear, assume standard serving size
-
-EXAMPLES:
-Input: "2 bananas, 200g cooked rice, 1 chicken breast"
-→ (2×89) + (206×(200/195)) + 165 = 178 + 211 + 165 = 554 kcal, 33g P, 91g C, 4.7g F
-
-Input: "Per serving: 320 kcal, 12g protein, 45g carbs, 10g fat. Had 1.5 servings"
-→ 480 kcal, 18g P, 67.5g C, 15g F
-
-Input: "1 egg, slice of toast, butter"
-→ 78 + 79 + (119×0.5 for ~0.5 tbsp butter) = ~218 kcal, 9g P, 14.6g C, 12g F
-
 Return ONLY this JSON, no markdown, no explanation:
 {
-  "title": "meal name (e.g., Chicken & Rice)",
+  "title": "meal name",
   "summary": "one-line description",
   "totals": {
     "kcal": number,
@@ -197,15 +180,7 @@ Return ONLY this JSON, no markdown, no explanation:
   },
   "confidence": 0.0 to 1.0,
   "source": "label" or "estimated"
-}
-
-CONFIDENCE SCORING:
-- 0.95-1.0 = Label data provided
-- 0.8-0.95 = Specific quantities + food names
-- 0.6-0.8 = Vague quantities or mixed data
-- <0.6 = Uncertain (but still estimate)
-`;
-
+}`;
 
       const content = [
         { type: "text", text: systemInstruction },
@@ -233,26 +208,22 @@ CONFIDENCE SCORING:
       let analysisText = data.choices?.[0]?.message?.content || '';
       console.log('Raw response text:', analysisText);
 
-           let jsonText = analysisText.trim();
+      let jsonText = analysisText.trim();
       
-      // Remove markdown code blocks if present
-      if (jsonText.includes('``````json')[1].split('```
-      else if (jsonText.includes('```')) jsonText = jsonText.split('``````')[0].trim();
+      if (jsonText.includes('```json')) jsonText = jsonText.split('```json')[1].split('```')[0].trim();
+      else if (jsonText.includes('```')) jsonText = jsonText.split('```')[1].split('```')[0].trim();
       
-      // Remove leading/trailing backticks
       jsonText = jsonText.replace(/^`+|`+$/g, '').trim();
 
       let parsed;
       try {
         parsed = JSON.parse(jsonText);
       } catch (parseError) {
-        // If JSON parse fails, try to extract JSON object from text
         const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           try {
             parsed = JSON.parse(jsonMatch[0]);
           } catch (e2) {
-            // Last resort: create default response from description
             const desc = (newMeal.description || '').trim();
             parsed = {
               title: desc.slice(0, 40) || 'Meal',
@@ -263,7 +234,6 @@ CONFIDENCE SCORING:
             };
           }
         } else {
-          // Completely failed - use default
           const desc = (newMeal.description || '').trim();
           parsed = {
             title: desc.slice(0, 40) || 'Meal',
@@ -274,7 +244,6 @@ CONFIDENCE SCORING:
           };
         }
       }
-
 
       const title = parsed.title || (desc ? desc.slice(0, 40) : 'Meal');
       const totals = parsed.totals || {};
