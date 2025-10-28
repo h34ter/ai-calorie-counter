@@ -138,17 +138,74 @@ const NutritionTracker = () => {
         ? await new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsDataURL(photo.blob); })
         : null;
 
-      const systemInstruction = `
-Return ONLY strict JSON, no markdown fences.
-Schema:
+            const systemInstruction = `
+You are a precision nutrition analyzer. Your job is to extract or calculate accurate macro totals.
+
+INPUT: User may provide ONE of:
+1. Food description (e.g., "2 bananas, 200g rice, grilled chicken breast")
+2. Nutrition label text (e.g., "Per serving: 250 kcal, 15g protein, 30g carbs, 8g fat")
+3. Both (description + label)
+
+CRITICAL INSTRUCTIONS:
+- If nutrition label data is provided, USE IT AS PRIMARY SOURCE (most accurate)
+- If only food description, use USDA reference data below
+- ALWAYS multiply by quantity (e.g., "3 bananas" = 3x individual banana values)
+- Round to 1 decimal place for protein/carbs/fat
+- Be CONSERVATIVE if uncertain
+
+USDA Reference (per standard serving as noted):
+- Banana (1 medium ~118g): 89 kcal, 1.1g protein, 23g carbs, 0.3g fat
+- Rice (cooked, 1 cup ~195g): 206 kcal, 4.3g protein, 45g carbs, 0.4g fat
+- Chicken breast (cooked, 3.5oz ~100g): 165 kcal, 31g protein, 0g carbs, 3.6g fat
+- Egg (1 medium ~50g): 78 kcal, 6.3g protein, 0.6g carbs, 5.3g fat
+- Bread (1 slice ~28g): 79 kcal, 2.7g protein, 14g carbs, 1g fat
+- Broccoli (cooked, 1 cup ~156g): 55 kcal, 3.7g protein, 11g carbs, 0.6g fat
+- Pasta (cooked, 1 cup ~140g): 220 kcal, 8g protein, 43g carbs, 1.3g fat
+- Olive oil (1 tbsp ~14g): 119 kcal, 0g protein, 0g carbs, 14g fat
+- Milk (1 cup ~240ml): 149 kcal, 8g protein, 12g carbs, 8g fat
+- Oats (1 cup dry ~156g): 607 kcal, 26g protein, 104g carbs, 11g fat
+- Yogurt (1 cup ~227g): 149 kcal, 10g protein, 11g carbs, 5g fat
+- Salmon (3.5oz cooked ~100g): 208 kcal, 20g protein, 0g carbs, 13g fat
+- Almonds (1 oz ~28g): 161 kcal, 6g protein, 6g carbs, 14g fat
+- Cheese (1 oz ~28g): 113 kcal, 7g protein, 0.4g carbs, 9g fat
+
+PARSING LOGIC:
+1. Look for numbers + food names (e.g., "2 bananas" = multiply banana ref by 2)
+2. Look for "grams" or "g" notation (e.g., "200g rice" = scale rice reference by quantity)
+3. Look for label-style text (e.g., "per 100g: 320 kcal..." or "Nutrition: 15g protein")
+4. If quantities unclear, assume standard serving size
+
+EXAMPLES:
+Input: "2 bananas, 200g cooked rice, 1 chicken breast"
+→ (2×89) + (206×(200/195)) + 165 = 178 + 211 + 165 = 554 kcal, 33g P, 91g C, 4.7g F
+
+Input: "Per serving: 320 kcal, 12g protein, 45g carbs, 10g fat. Had 1.5 servings"
+→ 480 kcal, 18g P, 67.5g C, 15g F
+
+Input: "1 egg, slice of toast, butter"
+→ 78 + 79 + (119×0.5 for ~0.5 tbsp butter) = ~218 kcal, 9g P, 14.6g C, 12g F
+
+Return ONLY this JSON, no markdown, no explanation:
 {
-  "title": "short meal title",
-  "summary": "one line",
-  "totals": { "kcal": number, "protein": number, "carbs": number, "fat": number },
-  "confidence": number
+  "title": "meal name (e.g., Chicken & Rice)",
+  "summary": "one-line description",
+  "totals": {
+    "kcal": number,
+    "protein": number,
+    "carbs": number,
+    "fat": number
+  },
+  "confidence": 0.0 to 1.0,
+  "source": "label" or "estimated"
 }
-All macros in grams. Estimate conservatively if unsure.
+
+CONFIDENCE SCORING:
+- 0.95-1.0 = Label data provided
+- 0.8-0.95 = Specific quantities + food names
+- 0.6-0.8 = Vague quantities or mixed data
+- <0.6 = Uncertain (but still estimate)
 `;
+
 
       const content = [
         { type: "text", text: systemInstruction },
@@ -163,7 +220,7 @@ All macros in grams. Estimate conservatively if unsure.
           model: "gpt-4o",
           messages: [{ role: "user", content }],
           max_tokens: 600,
-          temperature: 0.2
+          temperature: 0.1
         })
       });
 
