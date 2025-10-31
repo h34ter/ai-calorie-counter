@@ -393,7 +393,7 @@ Rules:
   const dailyData = calculateDailyTotals();
 
   return (
-    <div className="max-w-4xl mx-auto p-6 bg-gray-50 min-h-screen">
+    <div className="max-w-6xl mx-auto p-6 bg-gray-50 min-h-screen">
       <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center space-x-3">
@@ -421,51 +421,54 @@ Rules:
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-blue-50 p-4 rounded-lg">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-blue-900">Calories</h3>
-              <TrendingUp className="h-5 w-5 text-blue-600" />
+        {/* HUGE MACROS DISPLAY */}
+        <div className="bg-gradient-to-br from-blue-900 to-indigo-900 p-8 rounded-2xl mb-8 shadow-xl">
+          <h2 className="text-white text-2xl font-bold mb-6">📊 TODAY'S MACROS</h2>
+          
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            {/* CALORIES */}
+            <div className="bg-white/10 backdrop-blur p-6 rounded-xl border-2 border-white/30">
+              <p className="text-white/80 text-sm font-semibold mb-2">CALORIES</p>
+              <p className="text-white text-6xl font-black">{dailyData.totals.kcal}</p>
+              <p className="text-white/70 text-xl mt-2">/ {dailyData.targets.kcal}</p>
+              <p className="text-green-300 text-lg font-bold mt-2">{dailyData.remaining.kcal} left</p>
+              <button
+                onClick={() => setShowSettings(true)}
+                className="text-xs text-yellow-300 hover:text-yellow-100 mt-3 underline"
+              >
+                ✏️ Edit
+              </button>
             </div>
-            <p className="text-2xl font-bold text-blue-900">{dailyData.totals.kcal}</p>
-            <p className="text-sm text-blue-700">/ {dailyData.targets.kcal} target</p>
-            <p className="text-sm text-blue-600">{dailyData.remaining.kcal} remaining</p>
-            <button
-              onClick={() => setShowSettings(true)}
-              className="text-xs text-blue-600 hover:text-blue-800 mt-2 underline"
-            >
-              ✏️ Edit Target
-            </button>
-          </div>
 
-          <div className="bg-green-50 p-4 rounded-lg">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-green-900">Protein</h3>
-              {dailyData.status.protein_ok ?
-                <CheckCircle className="h-5 w-5 text-green-600" /> :
-                <AlertCircle className="h-5 w-5 text-yellow-600" />
-              }
+            {/* PROTEIN */}
+            <div className="bg-white/10 backdrop-blur p-6 rounded-xl border-2 border-green-400/30">
+              <p className="text-green-200 text-sm font-semibold mb-2">PROTEIN</p>
+              <p className="text-green-300 text-6xl font-black">{dailyData.totals.p}g</p>
+              <p className="text-white/70 text-xl mt-2">/ {dailyData.targets.p_g}g</p>
+              <p className={`text-lg font-bold mt-2 ${Math.abs(dailyData.totals.p_pct - userConfig.targets.macro_split_pct.protein) <= 5 ? 'text-green-400' : 'text-yellow-300'}`}>
+                {dailyData.totals.p_pct}%
+              </p>
             </div>
-            <p className="text-2xl font-bold text-green-900">{dailyData.totals.p}g</p>
-            <p className="text-sm text-green-700">/ {dailyData.targets.p_g}g target</p>
-            <p className="text-sm text-green-600">{Math.round(dailyData.remaining.p_g * 10) / 10}g remaining</p>
-          </div>
 
-          <div className="bg-purple-50 p-4 rounded-lg">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-purple-900">Macros</h3>
-              <div className="flex space-x-1">
-                {dailyData.status.protein_ok && <div className="w-2 h-2 bg-green-500 rounded-full"></div>}
-                {dailyData.status.carbs_ok && <div className="w-2 h-2 bg-green-500 rounded-full"></div>}
-                {dailyData.status.fat_ok && <div className="w-2 h-2 bg-green-500 rounded-full"></div>}
-              </div>
+            {/* CARBS */}
+            <div className="bg-white/10 backdrop-blur p-6 rounded-xl border-2 border-purple-400/30">
+              <p className="text-purple-200 text-sm font-semibold mb-2">CARBS</p>
+              <p className="text-purple-300 text-6xl font-black">{dailyData.totals.c}g</p>
+              <p className="text-white/70 text-xl mt-2">/ {dailyData.targets.c_g}g</p>
+              <p className={`text-lg font-bold mt-2 ${Math.abs(dailyData.totals.c_pct - userConfig.targets.macro_split_pct.carbs) <= 5 ? 'text-purple-400' : 'text-yellow-300'}`}>
+                {dailyData.totals.c_pct}%
+              </p>
             </div>
-            <p className="text-sm text-purple-700">
-              P: {dailyData.totals.p_pct}% | C: {dailyData.totals.c_pct}% | F: {dailyData.totals.f_pct}%
-            </p>
-            <p className="text-sm text-purple-600">
-              Target: {userConfig.targets.macro_split_pct.protein}% | {userConfig.targets.macro_split_pct.carbs}% | {userConfig.targets.macro_split_pct.fat}%
-            </p>
+
+            {/* FAT */}
+            <div className="bg-white/10 backdrop-blur p-6 rounded-xl border-2 border-orange-400/30">
+              <p className="text-orange-200 text-sm font-semibold mb-2">FAT</p>
+              <p className="text-orange-300 text-6xl font-black">{dailyData.totals.f}g</p>
+              <p className="text-white/70 text-xl mt-2">/ {dailyData.targets.f_g}g</p>
+              <p className={`text-lg font-bold mt-2 ${Math.abs(dailyData.totals.f_pct - userConfig.targets.macro_split_pct.fat) <= 5 ? 'text-orange-400' : 'text-yellow-300'}`}>
+                {dailyData.totals.f_pct}%
+              </p>
+            </div>
           </div>
         </div>
 
@@ -794,43 +797,6 @@ Rules:
                 </div>
               );
             })}
-
-            <div className="mt-8 space-y-6">
-              <h2 className="text-xl font-semibold text-gray-900">Daily Summary [{currentDate}]</h2>
-
-              <div className="bg-blue-50 p-6 rounded-lg border border-blue-200">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm text-blue-700">Total Calories</p>
-                    <p className="text-3xl font-bold text-blue-900">{dailyData.totals.kcal}</p>
-                    <p className="text-sm text-blue-600">/ {dailyData.targets.kcal} goal</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-green-700">Protein</p>
-                    <p className="text-3xl font-bold text-green-900">{dailyData.totals.p}g</p>
-                    <p className="text-sm text-green-600">/ {dailyData.targets.p_g}g goal</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-purple-700">Carbs</p>
-                    <p className="text-3xl font-bold text-purple-900">{dailyData.totals.c}g</p>
-                    <p className="text-sm text-purple-600">/ {dailyData.targets.c_g}g goal</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-orange-700">Fat</p>
-                    <p className="text-3xl font-bold text-orange-900">{dailyData.totals.f}g</p>
-                    <p className="text-sm text-orange-600">/ {dailyData.targets.f_g}g goal</p>
-                  </div>
-                </div>
-
-                <div className="mt-4 p-3 bg-gray-100 rounded">
-                  <p className="text-sm text-gray-700">
-                    Breakdown: <span className="font-semibold">{dailyData.totals.p_pct}% Protein</span> |
-                    <span className="font-semibold"> {dailyData.totals.c_pct}% Carbs</span> |
-                    <span className="font-semibold"> {dailyData.totals.f_pct}% Fat</span>
-                  </p>
-                </div>
-              </div>
-            </div>
           </div>
         )}
       </div>
