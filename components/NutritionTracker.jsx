@@ -66,7 +66,7 @@ const NutritionTracker = () => {
     setShowCamera(false);
   };
 
-  const capturePhoto = () => {
+  const capturePhoto = async () => {
     const canvas = canvasRef.current;
     const video = videoRef.current;
     
@@ -76,7 +76,7 @@ const NutritionTracker = () => {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0);
       
-      canvas.toBlob((blob) => {
+      canvas.toBlob(async (blob) => {
         const photoUrl = URL.createObjectURL(blob);
         const photoId = `photo_${Date.now()}`;
         
@@ -92,13 +92,15 @@ const NutritionTracker = () => {
           ...prev,
           photos: [...prev.photos, newPhoto]
         }));
+
+        await analyzePhotoOnly(newPhoto);
       }, 'image/jpeg', 0.8);
     }
     
     stopCamera();
   };
 
-  const handleFileUpload = (event) => {
+  const handleFileUpload = async (event) => {
     const file = event.target.files[0];
     if (file && file.type.startsWith('image/')) {
       const photoUrl = URL.createObjectURL(file);
@@ -116,6 +118,8 @@ const NutritionTracker = () => {
         ...prev,
         photos: [...prev.photos, newPhoto]
       }));
+
+      await analyzePhotoOnly(newPhoto);
     }
     
     if (fileInputRef.current) {
@@ -123,78 +127,76 @@ const NutritionTracker = () => {
     }
   };
 
-  const analyzeFromDescription = async () => {
+  const analyzePhotoOnly = async (photo) => {
     const OPENAI_API_KEY = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
     if (!OPENAI_API_KEY || OPENAI_API_KEY === 'your_openai_api_key_here') {
       setAnalysisError('OpenAI API key not configured.');
       return;
     }
+    
     setIsAnalyzing(true);
     setAnalysisError(null);
+    
     try {
-      const desc = (newMeal.description || '').trim();
-      const photo = newMeal.photos[0] || null;
-      const base64 = photo
-        ? await new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsDataURL(photo.blob); })
-        : null;
-
-      const systemInstruction = `You are a precision nutrition analyzer. Your job is to extract or calculate accurate macro totals.
-
-INPUT: User may provide ONE of:
-1. Food description (e.g., "2 bananas, 200g rice, grilled chicken breast")
-2. Nutrition label text (e.g., "Per serving: 250 kcal, 15g protein, 30g carbs, 8g fat")
-3. Both (description + label)
-
-CRITICAL INSTRUCTIONS:
-- If nutrition label data is provided, USE IT AS PRIMARY SOURCE (most accurate)
-- If only food description, use USDA reference data below
-- ALWAYS multiply by quantity (e.g., "3 bananas" = 3x individual banana values)
-- Round to 1 decimal place for protein/carbs/fat
-- Be CONSERVATIVE if uncertain
-
-USDA Reference (per standard serving as noted):
-- Banana (1 medium ~118g): 89 kcal, 1.1g protein, 23g carbs, 0.3g fat
-- Rice (cooked, 1 cup ~195g): 206 kcal, 4.3g protein, 45g carbs, 0.4g fat
-- Chicken breast (cooked, 3.5oz ~100g): 165 kcal, 31g protein, 0g carbs, 3.6g fat
-- Egg (1 medium ~50g): 78 kcal, 6.3g protein, 0.6g carbs, 5.3g fat
-- Bread (1 slice ~28g): 79 kcal, 2.7g protein, 14g carbs, 1g fat
-- Broccoli (cooked, 1 cup ~156g): 55 kcal, 3.7g protein, 11g carbs, 0.6g fat
-- Pasta (cooked, 1 cup ~140g): 220 kcal, 8g protein, 43g carbs, 1.3g fat
-- Olive oil (1 tbsp ~14g): 119 kcal, 0g protein, 0g carbs, 14g fat
-- Milk (1 cup ~240ml): 149 kcal, 8g protein, 12g carbs, 8g fat
-- Oats (1 cup dry ~156g): 607 kcal, 26g protein, 104g carbs, 11g fat
-- Yogurt (1 cup ~227g): 149 kcal, 10g protein, 11g carbs, 5g fat
-- Salmon (3.5oz cooked ~100g): 208 kcal, 20g protein, 0g carbs, 13g fat
-- Almonds (1 oz ~28g): 161 kcal, 6g protein, 6g carbs, 14g fat
-- Cheese (1 oz ~28g): 113 kcal, 7g protein, 0.4g carbs, 9g fat
-
-Return ONLY this JSON, no markdown, no explanation:
-{
-  "title": "meal name",
-  "summary": "one-line description",
-  "totals": {
-    "kcal": number,
-    "protein": number,
-    "carbs": number,
-    "fat": number
-  },
-  "confidence": 0.0 to 1.0,
-  "source": "label" or "estimated"
-}`;
-
-      const content = [
-        { type: "text", text: systemInstruction },
-        { type: "text", text: desc || "No user description provided." }
-      ];
-      if (base64) content.push({ type: "image_url", image_url: { url: base64, detail: "high" } });
+      const base64 = await new Promise((resolve) => { 
+        const r = new FileReader(); 
+        r.onload = () => resolve(r.result); 
+        r.readAsDataURL(photo.blob); 
+      });
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: "gpt-4o",
-          messages: [{ role: "user", content }],
-          max_tokens: 600,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: `You are a professional nutritionist analyzing this food photo. Extract ALL visible foods and estimate accurate nutrition.
+
+ANALYZE THIS IMAGE:
+1. Identify each distinct food item
+2. Estimate portion sizes (weight/volume)
+3. Calculate macros using USDA data
+4. Be conservative with estimates
+
+Return ONLY this JSON structure:
+{
+  "foods": [
+    {
+      "name": "specific food name",
+      "portion": "estimated amount (e.g., 200g, 1 cup, 2 pieces)",
+      "kcal": number,
+      "protein": number,
+      "carbs": number,
+      "fat": number,
+      "confidence": 0.0-1.0
+    }
+  ],
+  "meal_type": "breakfast/lunch/dinner/snack",
+  "total_kcal": number,
+  "analysis_confidence": 0.0-1.0
+}
+
+IMPORTANT:
+- Use realistic portion sizes
+- Reference USDA nutrition data
+- If unsure, estimate conservatively
+- Include ALL visible foods, even small items
+- Account for cooking methods (fried vs grilled affects calories)
+- Round macros to 1 decimal place`
+                },
+                {
+                  type: "image_url",
+                  image_url: { url: base64, detail: "high" }
+                }
+              ]
+            }
+          ],
+          max_tokens: 800,
           temperature: 0.1
         })
       });
@@ -206,13 +208,11 @@ Return ONLY this JSON, no markdown, no explanation:
 
       const data = await response.json();
       let analysisText = data.choices?.[0]?.message?.content || '';
-      console.log('Raw response text:', analysisText);
+      console.log('Photo analysis:', analysisText);
 
       let jsonText = analysisText.trim();
-      
       if (jsonText.includes('```json')) jsonText = jsonText.split('```json')[1].split('```')[0].trim();
       else if (jsonText.includes('```')) jsonText = jsonText.split('```')[1].split('```')[0].trim();
-      
       jsonText = jsonText.replace(/^`+|`+$/g, '').trim();
 
       let parsed;
@@ -221,73 +221,54 @@ Return ONLY this JSON, no markdown, no explanation:
       } catch (parseError) {
         const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-          try {
-            parsed = JSON.parse(jsonMatch[0]);
-          } catch (e2) {
-            const desc = (newMeal.description || '').trim();
-            parsed = {
-              title: desc.slice(0, 40) || 'Meal',
-              summary: desc.slice(0, 80) || 'Analyzed meal',
-              totals: { kcal: 500, protein: 25, carbs: 60, fat: 15 },
-              confidence: 0.3,
-              source: 'estimated'
-            };
-          }
+          parsed = JSON.parse(jsonMatch[0]);
         } else {
-          const desc = (newMeal.description || '').trim();
-          parsed = {
-            title: desc.slice(0, 40) || 'Meal',
-            summary: desc.slice(0, 80) || 'Analyzed meal',
-            totals: { kcal: 500, protein: 25, carbs: 60, fat: 15 },
-            confidence: 0.2,
-            source: 'estimated'
-          };
+          throw new Error('Could not parse nutrition data from image');
         }
       }
 
-      const title = parsed.title || (desc ? desc.slice(0, 40) : 'Meal');
-      const totals = parsed.totals || {};
-      const customFood = {
-        name: parsed.summary || title,
-        kcal: Math.max(0, Math.round(Number(totals.kcal) || 0)),
-        p: Math.max(0, Math.round((Number(totals.protein) || 0) * 10) / 10),
-        c: Math.max(0, Math.round((Number(totals.carbs) || 0) * 10) / 10),
-        f: Math.max(0, Math.round((Number(totals.fat) || 0) * 10) / 10),
-      };
-
-      const item = {
-        id: `item_${Date.now()}`,
+      const items = parsed.foods.map((food, index) => ({
+        id: `item_${Date.now()}_${index}`,
         ref: '',
         servings: '1',
         measured: 'servings',
         fraction: 1,
         aiDetected: true,
-        confidence: Math.min(0.99, Math.max(0, Number(parsed.confidence) || 0.8)),
-        customFood,
+        confidence: food.confidence,
+        customFood: {
+          name: food.name,
+          kcal: Math.round(food.kcal || 0),
+          p: Math.round((food.protein || 0) * 10) / 10,
+          c: Math.round((food.carbs || 0) * 10) / 10,
+          f: Math.round((food.fat || 0) * 10) / 10
+        },
         editable: true
-      };
+      }));
+
+      const mealTitle = parsed.meal_type ? 
+        parsed.meal_type.charAt(0).toUpperCase() + parsed.meal_type.slice(1) : 
+        'Photo Meal';
 
       setNewMeal(prev => ({
         ...prev,
-        title: prev.title || title,
-        items: [item],
-        analysisResults: [
-          ...prev.analysisResults,
-          {
-            photoId: newMeal.photos?.[0]?.id || null,
-            detectedFoods: [{ name: customFood.name, confidence: item.confidence, estimatedNutrition: customFood }],
-            totalEstimatedCalories: customFood.kcal,
-            suggestedMealType: prev.title || title,
-            confidence: item.confidence,
-            analysisMethod: base64 ? 'GPT-4o (text + photo)' : 'GPT-4o (text only)',
-            analysisNotes: parsed.summary || 'Generated from description'
-          }
-        ],
-        photos: prev.photos.map(p => (p.id === newMeal.photos?.[0]?.id ? { ...p, analyzed: true } : p))
+        title: prev.title || mealTitle,
+        items: items,
+        analysisResults: [{
+          photoId: photo.id,
+          detectedFoods: parsed.foods,
+          totalEstimatedCalories: parsed.total_kcal || 0,
+          confidence: parsed.analysis_confidence || 0.8,
+          analysisMethod: 'GPT-4o Vision Only',
+          analysisNotes: `Detected ${parsed.foods.length} food items from photo`
+        }],
+        photos: prev.photos.map(p => 
+          p.id === photo.id ? { ...p, analyzed: true } : p
+        )
       }));
+
     } catch (err) {
-      console.error('Description analysis error:', err);
-      setAnalysisError(err.message || 'Failed to analyze description.');
+      console.error('Photo analysis error:', err);
+      setAnalysisError(err.message || 'Failed to analyze photo');
     } finally {
       setIsAnalyzing(false);
     }
@@ -661,7 +642,7 @@ Return ONLY this JSON, no markdown, no explanation:
             <h3 className="text-lg font-semibold mb-4">Add Meal</h3>
             
             <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Meal Title</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Meal Title (optional)</label>
               <input
                 type="text"
                 value={newMeal.title}
@@ -671,20 +652,9 @@ Return ONLY this JSON, no markdown, no explanation:
               />
             </div>
 
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">What did you have?</label>
-              <textarea
-                value={newMeal.description}
-                onChange={(e) => setNewMeal(prev => ({ ...prev, description: e.target.value }))}
-                rows={3}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Type: 2 bananas, 200g rice, grilled chicken..."
-              />
-            </div>
-
             <div className="mb-6">
               <div className="flex items-center justify-between mb-3">
-                <label className="block text-sm font-medium text-gray-700">Photo (optional)</label>
+                <label className="block text-sm font-medium text-gray-700">📸 Take or Upload Photo</label>
                 <div className="flex space-x-2">
                   <button
                     type="button"
@@ -721,7 +691,7 @@ Return ONLY this JSON, no markdown, no explanation:
                         <img
                           src={photo.url}
                           alt={`Food photo ${index + 1}`}
-                          className="w-24 h-24 object-cover rounded-md"
+                          className="w-24 h-24 object-cover rounded-md border-2 border-green-500"
                         />
                         <button
                           type="button"
@@ -743,27 +713,30 @@ Return ONLY this JSON, no markdown, no explanation:
             {isAnalyzing && (
               <div className="flex items-center space-x-2 mb-4 p-4 bg-blue-100 rounded-md">
                 <Loader className="h-6 w-6 text-blue-600 animate-spin" />
-                <span className="text-blue-800 font-medium">Analyzing...</span>
+                <span className="text-blue-800 font-medium">🤖 Analyzing food from image...</span>
               </div>
             )}
 
             {analysisError && (
               <div className="mb-4 p-3 bg-red-100 rounded-md">
-                <span className="text-red-800">{analysisError}</span>
+                <span className="text-red-800">❌ {analysisError}</span>
               </div>
             )}
 
             {newMeal.items.length > 0 && (
               <div className="mb-6 p-4 bg-white rounded-md border border-gray-200">
-                <h4 className="text-sm font-medium text-gray-700 mb-3">Estimated Nutrition:</h4>
+                <h4 className="text-sm font-medium text-gray-700 mb-3">✅ Detected Foods:</h4>
                 {newMeal.items.map((item) => {
                   const macros = calculateItemMacros(item);
                   const foodName = item.customFood ? item.customFood.name : 'Unknown Food';
                   return (
-                    <div key={item.id}>
+                    <div key={item.id} className="mb-3 p-3 bg-gray-50 rounded">
                       <p className="font-medium text-gray-900">{foodName}</p>
                       <p className="text-sm text-gray-600">
                         {macros.kcal} kcal | {macros.p}g P | {macros.c}g C | {macros.f}g F
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Confidence: {Math.round(item.confidence * 100)}%
                       </p>
                     </div>
                   );
@@ -773,19 +746,11 @@ Return ONLY this JSON, no markdown, no explanation:
 
             <div className="flex space-x-4">
               <button
-                onClick={analyzeFromDescription}
-                disabled={!newMeal.description.trim()}
-                className="flex items-center space-x-2 px-5 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
-              >
-                <Brain className="h-4 w-4" />
-                <span>Analyze & Add</span>
-              </button>
-              <button
                 onClick={saveMeal}
                 disabled={newMeal.items.length === 0}
-                className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
               >
-                Save Meal
+                💾 Save Meal
               </button>
               <button
                 onClick={() => setShowAddMeal(false)}
