@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Calendar, Target, TrendingUp, CheckCircle, AlertCircle, Settings, Save, Camera, Upload, Loader } from 'lucide-react';
 
 const INITIAL_USER_CONFIG = {
@@ -42,6 +42,24 @@ const NutritionTracker = () => {
   const [cameraStream, setCameraStream] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
+
+  // ---- PERSIST DATA TO LOCALSTORAGE ----
+  useEffect(() => {
+    const savedConfig = localStorage.getItem('userConfig');
+    const savedMeals = localStorage.getItem('meals');
+    if (savedConfig) setUserConfig(JSON.parse(savedConfig));
+    if (savedMeals) setMeals(JSON.parse(savedMeals));
+  }, []);
+
+  // Save user config whenever it changes
+  useEffect(() => {
+    localStorage.setItem('userConfig', JSON.stringify(userConfig));
+  }, [userConfig]);
+
+  // Save meals whenever they change
+  useEffect(() => {
+    localStorage.setItem('meals', JSON.stringify(meals));
+  }, [meals]);
 
   const startCamera = async () => {
     try {
@@ -412,6 +430,12 @@ Rules:
             <p className="text-2xl font-bold text-blue-900">{dailyData.totals.kcal}</p>
             <p className="text-sm text-blue-700">/ {dailyData.targets.kcal} target</p>
             <p className="text-sm text-blue-600">{dailyData.remaining.kcal} remaining</p>
+            <button
+              onClick={() => setShowSettings(true)}
+              className="text-xs text-blue-600 hover:text-blue-800 mt-2 underline"
+            >
+              ✏️ Edit Target
+            </button>
           </div>
 
           <div className="bg-green-50 p-4 rounded-lg">
@@ -463,22 +487,28 @@ Rules:
               <div className="space-y-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Daily Calorie Target</label>
-                  <input
-                    type="number"
-                    value={userConfig.targets.daily_calories_kcal}
-                    onChange={(e) => updateTargets({ daily_calories_kcal: parseInt(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="number"
+                      value={userConfig.targets.daily_calories_kcal}
+                      onChange={(e) => updateTargets({ daily_calories_kcal: parseInt(e.target.value) || 0 })}
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <span className="text-gray-600">kcal</span>
+                  </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Body Weight (lbs)</label>
-                  <input
-                    type="number"
-                    value={userConfig.body_weight_lb}
-                    onChange={(e) => updateUserConfig({ body_weight_lb: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Body Weight</label>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="number"
+                      value={userConfig.body_weight_lb}
+                      onChange={(e) => updateUserConfig({ body_weight_lb: parseFloat(e.target.value) || 0 })}
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <span className="text-gray-600">lbs</span>
+                  </div>
                 </div>
 
                 <div>
@@ -533,14 +563,14 @@ Rules:
               <div className="flex space-x-4 mt-6">
                 <button
                   onClick={() => setShowSettings(false)}
-                  className="flex items-center space-x-2 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  className="flex items-center space-x-2 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex-1"
                 >
                   <Save className="h-4 w-4" />
                   <span>Save</span>
                 </button>
                 <button
                   onClick={() => setShowSettings(false)}
-                  className="px-6 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors"
+                  className="px-6 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors flex-1"
                 >
                   Close
                 </button>
