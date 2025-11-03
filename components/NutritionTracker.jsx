@@ -35,13 +35,14 @@ const saveState = async (userConfig, meals) => {
   }, 400);
 };
 
+// CHANGE THESE DEFAULTS - they'll be used only first time, then always loaded from Blob
 const DEFAULT_CONFIG = {
   user_id: "luis",
   body_weight_lb: 150,
   timezone: "America/New_York",
   targets: {
     daily_calories_kcal: 2400,
-    macro_split_pct: { protein: 25, carbs: 50, fat: 25 },
+    macro_split_pct: { protein: 30, carbs: 45, fat: 25 },
     protein_min_g: null
   },
   day_reset_rule: "manual_or_midnight"
@@ -629,7 +630,7 @@ Rules:
                 />
                 <span className="text-sm font-bold text-gray-700">kcal</span>
               </div>
-              <p className="text-xs text-gray-600 mt-2">Your daily calorie goal. Changes save immediately.</p>
+              <p className="text-xs text-gray-600 mt-2">Your daily calorie goal. Saves immediately when changed.</p>
             </div>
 
             <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
@@ -644,7 +645,7 @@ Rules:
                 />
                 <span className="text-sm font-bold text-gray-700">lbs</span>
               </div>
-              <p className="text-xs text-gray-600 mt-2">Update your weight anytime. Changes save immediately.</p>
+              <p className="text-xs text-gray-600 mt-2">Update your weight anytime. Saves immediately.</p>
             </div>
 
             <div className="bg-green-50 p-4 rounded-lg border border-green-200">
@@ -712,10 +713,11 @@ Rules:
 
                 <p className="text-xs text-gray-600 mt-3">Total: {userConfig.targets.macro_split_pct.protein + userConfig.targets.macro_split_pct.carbs + userConfig.targets.macro_split_pct.fat}%</p>
               </div>
+              <p className="text-xs text-gray-600 mt-3">Macro split saves immediately when changed. All changes persist forever.</p>
             </div>
 
             <div className="bg-blue-100 p-3 rounded-lg border border-blue-300">
-              <p className="text-xs text-blue-900">✓ All changes save automatically and persist forever (in 48h rolling window).</p>
+              <p className="text-xs text-blue-900">✓ EVERYTHING you change saves automatically and persists on refresh.</p>
             </div>
           </div>
 
