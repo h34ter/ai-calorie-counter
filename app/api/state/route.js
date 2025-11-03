@@ -40,12 +40,10 @@ export async function POST(req) {
     const { userConfig, meals } = body || {};
     const k = key(userId);
 
-    // Strip photos from meals (keep everything else including all targets)
     const safeMeals = Array.isArray(meals)
       ? meals.map((m) => ({ ...m, photos: [] }))
       : [];
 
-    // Save FULL userConfig with ALL targets preserved
     const payload = { 
       userConfig: userConfig || {}, 
       meals: safeMeals, 
