@@ -8,12 +8,15 @@ if (!BLOB_TOKEN) {
 }
 
 function getUserKey(req: NextApiRequest): string {
-  // Use IP address or a session-based identifier
-  const forwarded = req.headers['x-forwarded-for'];
-  const ip = typeof forwarded === 'string' 
-    ? forwarded.split(',')[0] 
-    : req.socket.remoteAddress || 'unknown';
-  return `user-state-${ip}.json`;
+  const { user_id, date } = req.query;
+  
+  if (!user_id) {
+    throw new Error('user_id is required');
+  }
+  
+  // Use date-based storage format: user-state-{user_id}-{date}.json
+  const dateStr = date || new Date().toISOString().split('T')[0];
+  return `user-state-${user_id}-${dateStr}.json`;
 }
 
 export default async function handler(
@@ -35,52 +38,36 @@ export default async function handler(
           }
         );
 
-        if (response.ok) {
-          const data = await response.json();
-          return res.status(200).json(data);
-        } else if (response.status === 404) {
-          // No state found, return empty
-          return res.status(200).json({ meals: [], photos: [] });
-        } else {
-          throw new Error(`Blob fetch failed: ${response.status}`);
+        if (!response.ok) {
+          if (response.status === 404) {
+            return res.status(200).json({ meals: [] });
+          }
+          throw new Error(`Failed to fetch: ${response.statusText}`);
         }
+
+        const state = await response.json();
+        return res.status(200).json(state);
       } catch (error) {
-        console.error('Error fetching state:', error);
-        // Return empty state on error
-        return res.status(200).json({ meals: [], photos: [] });
+        console.error('GET error:', error);
+        return res.status(200).json({ meals: [] });
       }
     } else if (req.method === 'POST') {
+      // Save state to Vercel Blob
       const state = req.body;
 
-      // Validate that state doesn't contain blob URLs or non-public URLs
-      const stateStr = JSON.stringify(state);
-      if (stateStr.includes('blob:') || stateStr.includes('data:')) {
-        return res.status(400).json({ 
-          error: 'State cannot contain blob or data URLs' 
-        });
-      }
-
-      // Store state in Vercel Blob with 24h cache
       const blob = await put(userKey, JSON.stringify(state), {
         access: 'public',
-        addRandomSuffix: false,
-        cacheControlMaxAge: 86400, // 24 hours
         token: BLOB_TOKEN,
+        contentType: 'application/json',
       });
 
-      return res.status(200).json({ 
-        success: true, 
-        url: blob.url 
-      });
+      return res.status(200).json({ success: true, url: blob.url });
     } else {
       res.setHeader('Allow', ['GET', 'POST']);
       return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
     }
   } catch (error) {
     console.error('API error:', error);
-    return res.status(500).json({ 
-      error: 'Internal server error',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    });
+    return res.status(500).json({ error: 'Internal Server Error', message: error instanceof Error ? error.message : 'Unknown error' });
   }
 }
