@@ -2,30 +2,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Target, Settings, Upload, Loader, X } from 'lucide-react';
 
-const INITIAL_USER_CONFIG = {
-  user_id: "luis",
-  body_weight_lb: 150,
-  timezone: "America/New_York",
-  targets: {
-    daily_calories_kcal: 2400,
-    macro_split_pct: { protein: 25, carbs: 50, fat: 25 },
-    protein_min_g: null
-  },
-  day_reset_rule: "manual_or_midnight"
-};
-
 const fetchState = async (userId) => {
   try {
     const res = await fetch(`/api/state?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' });
     if (!res.ok) throw new Error('Failed to load state');
-    const data = await res.json();
-    return {
-      userConfig: data?.userConfig || INITIAL_USER_CONFIG,
-      meals: data?.meals || []
-    };
+    return await res.json();
   } catch (e) {
     console.error('Fetch error:', e);
-    return { userConfig: INITIAL_USER_CONFIG, meals: [] };
+    return null;
   }
 };
 
@@ -36,21 +20,7 @@ const saveState = async (userConfig, meals) => {
     try {
       const payload = {
         user_id: userConfig?.user_id || 'luis',
-        userConfig: {
-          user_id: userConfig?.user_id || 'luis',
-          body_weight_lb: userConfig?.body_weight_lb || 150,
-          timezone: userConfig?.timezone || 'America/New_York',
-          targets: {
-            daily_calories_kcal: userConfig?.targets?.daily_calories_kcal || 2400,
-            macro_split_pct: {
-              protein: userConfig?.targets?.macro_split_pct?.protein || 25,
-              carbs: userConfig?.targets?.macro_split_pct?.carbs || 50,
-              fat: userConfig?.targets?.macro_split_pct?.fat || 25
-            },
-            protein_min_g: userConfig?.targets?.protein_min_g || null
-          },
-          day_reset_rule: userConfig?.day_reset_rule || 'manual_or_midnight'
-        },
+        userConfig: userConfig,
         meals: meals || []
       };
       
@@ -65,8 +35,21 @@ const saveState = async (userConfig, meals) => {
   }, 400);
 };
 
+const DEFAULT_CONFIG = {
+  user_id: "luis",
+  body_weight_lb: 150,
+  timezone: "America/New_York",
+  targets: {
+    daily_calories_kcal: 2400,
+    macro_split_pct: { protein: 25, carbs: 50, fat: 25 },
+    protein_min_g: null
+  },
+  day_reset_rule: "manual_or_midnight"
+};
+
 const NutritionTracker = () => {
-  const [userConfig, setUserConfig] = useState(INITIAL_USER_CONFIG);
+  const [isLoading, setIsLoading] = useState(true);
+  const [userConfig, setUserConfig] = useState(null);
   const [currentDate, setCurrentDate] = useState(new Date().toISOString().split('T')[0]);
   const [meals, setMeals] = useState([]);
   const [showAddMeal, setShowAddMeal] = useState(false);
@@ -85,23 +68,38 @@ const NutritionTracker = () => {
   const [analysisError, setAnalysisError] = useState(null);
   const [saveStatus, setSaveStatus] = useState('');
 
+  // LOAD ONCE ON MOUNT
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const data = await fetchState(INITIAL_USER_CONFIG.user_id);
+      const data = await fetchState('luis');
       if (cancelled) return;
-      setUserConfig(data.userConfig);
-      setMeals(data.meals);
+      
+      if (data?.userConfig) {
+        setUserConfig(data.userConfig);
+      } else {
+        setUserConfig(DEFAULT_CONFIG);
+      }
+      
+      if (Array.isArray(data?.meals)) {
+        setMeals(data.meals);
+      }
+      
+      setIsLoading(false);
     })();
+    
     return () => { cancelled = true; };
   }, []);
 
+  // SAVE WHENEVER userConfig OR meals CHANGE
   useEffect(() => {
-    saveState(userConfig, meals);
-    setSaveStatus('✓ Saved');
-    const timer = setTimeout(() => setSaveStatus(''), 2000);
-    return () => clearTimeout(timer);
-  }, [userConfig, meals]);
+    if (!isLoading && userConfig) {
+      saveState(userConfig, meals);
+      setSaveStatus('✓ Saved');
+      const timer = setTimeout(() => setSaveStatus(''), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [userConfig, meals, isLoading]);
 
   const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
@@ -315,15 +313,16 @@ Rules:
     const c_pct = totals.kcal > 0 ? Math.round((c_kcal / totals.kcal) * 100) : 0;
     const f_pct = totals.kcal > 0 ? Math.round((f_kcal / totals.kcal) * 100) : 0;
 
-    const target_p_g = Math.round((userConfig.targets.daily_calories_kcal * userConfig.targets.macro_split_pct.protein / 100) / 4);
-    const target_c_g = Math.round((userConfig.targets.daily_calories_kcal * userConfig.targets.macro_split_pct.carbs / 100) / 4);
-    const target_f_g = Math.round((userConfig.targets.daily_calories_kcal * userConfig.targets.macro_split_pct.fat / 100) / 9);
+    const config = userConfig || DEFAULT_CONFIG;
+    const target_p_g = Math.round((config.targets.daily_calories_kcal * config.targets.macro_split_pct.protein / 100) / 4);
+    const target_c_g = Math.round((config.targets.daily_calories_kcal * config.targets.macro_split_pct.carbs / 100) / 4);
+    const target_f_g = Math.round((config.targets.daily_calories_kcal * config.targets.macro_split_pct.fat / 100) / 9);
 
-    const remaining_kcal = userConfig.targets.daily_calories_kcal - totals.kcal;
+    const remaining_kcal = config.targets.daily_calories_kcal - totals.kcal;
 
     return {
       totals: { ...totals, p_kcal, c_kcal, f_kcal, p_pct, c_pct, f_pct },
-      targets: { kcal: userConfig.targets.daily_calories_kcal, p_g: target_p_g, c_g: target_c_g, f_g: target_f_g },
+      targets: { kcal: config.targets.daily_calories_kcal, p_g: target_p_g, c_g: target_c_g, f_g: target_f_g },
       remaining: { kcal: remaining_kcal },
       meals: dayMeals
     };
@@ -368,6 +367,14 @@ Rules:
       targets: { ...prev.targets, ...newTargets }
     }));
   };
+
+  if (isLoading || !userConfig) {
+    return (
+      <div className="w-full min-h-screen bg-gray-50 flex items-center justify-center">
+        <Loader className="h-8 w-8 text-blue-600 animate-spin" />
+      </div>
+    );
+  }
 
   const dailyData = calculateDailyTotals();
 
@@ -622,7 +629,7 @@ Rules:
                 />
                 <span className="text-sm font-bold text-gray-700">kcal</span>
               </div>
-              <p className="text-xs text-gray-600 mt-2">Your daily calorie goal.</p>
+              <p className="text-xs text-gray-600 mt-2">Your daily calorie goal. Changes save immediately.</p>
             </div>
 
             <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
@@ -637,7 +644,7 @@ Rules:
                 />
                 <span className="text-sm font-bold text-gray-700">lbs</span>
               </div>
-              <p className="text-xs text-gray-600 mt-2">Update your weight anytime.</p>
+              <p className="text-xs text-gray-600 mt-2">Update your weight anytime. Changes save immediately.</p>
             </div>
 
             <div className="bg-green-50 p-4 rounded-lg border border-green-200">
@@ -708,7 +715,7 @@ Rules:
             </div>
 
             <div className="bg-blue-100 p-3 rounded-lg border border-blue-300">
-              <p className="text-xs text-blue-900">✓ All changes auto-save and persist for 48 hours.</p>
+              <p className="text-xs text-blue-900">✓ All changes save automatically and persist forever (in 48h rolling window).</p>
             </div>
           </div>
 
