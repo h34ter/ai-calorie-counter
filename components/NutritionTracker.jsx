@@ -109,7 +109,7 @@ const NutritionTracker = () => {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0);
       canvas.toBlob(async (blob) => {
-        const photoUrl = URL.createObjectURL(blob); // session only
+        const photoUrl = URL.createObjectURL(blob);
         const photoId = `photo_${Date.now()}`;
         const newPhoto = { id: photoId, url: photoUrl, timestamp: new Date().toISOString(), blob, analyzed: false };
         setNewMeal(prev => ({ ...prev, photos: [...prev.photos, newPhoto] }));
@@ -122,7 +122,7 @@ const NutritionTracker = () => {
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
     if (file && file.type.startsWith('image/')) {
-      const photoUrl = URL.createObjectURL(file); // session only
+      const photoUrl = URL.createObjectURL(file);
       const photoId = `photo_${Date.now()}`;
       const newPhoto = { id: photoId, url: photoUrl, timestamp: new Date().toISOString(), blob: file, analyzed: false };
       setNewMeal(prev => ({ ...prev, photos: [...prev.photos, newPhoto] }));
@@ -205,17 +205,16 @@ Rules:
       const data = await response.json();
       let analysisText = data.choices?.[0]?.message?.content || '';
 
-      // ---- CORRECT JSON BLOCK PARSE (fixes your compile error) ----
       let jsonText = analysisText.trim();
-      if (jsonText.includes('```
+      if (jsonText.includes('```json')) {
         const parts = jsonText.split('```json');
         if (parts[1]) {
-          jsonText = parts[1].split('```
+          jsonText = parts[1].split('```')[0].trim();
         }
       } else if (jsonText.includes('```')) {
-        const parts = jsonText.split('```
-        if (parts) {
-          jsonText = parts.split('```')[0].trim();
+        const parts = jsonText.split('```');
+        if (parts[1]) {
+          jsonText = parts[1].split('```')[0].trim();
         }
       }
       jsonText = jsonText.replace(/^`+|`+$/g, '').trim();
@@ -225,8 +224,11 @@ Rules:
         parsed = JSON.parse(jsonText);
       } catch (e) {
         const match = jsonText.match(/\{[\s\S]*\}/);
-        if (match) parsed = JSON.parse(match[0]);
-        else throw new Error('Invalid JSON response');
+        if (match) {
+          parsed = JSON.parse(match[0]);
+        } else {
+          throw new Error('Invalid JSON response');
+        }
       }
 
       const foods = parsed.foods || [];
@@ -396,7 +398,7 @@ Rules:
       title: newMeal.title,
       items: newMeal.items,
       notes: newMeal.notes,
-      photos: [], // do not persist photos
+      photos: [],
       analysisResults: newMeal.analysisResults,
       source: 'manual'
     };
@@ -450,7 +452,6 @@ Rules:
           </div>
         </div>
 
-        {/* BIG MACROS */}
         <div className="bg-gradient-to-br from-blue-900 to-indigo-900 p-8 rounded-2xl mb-8 shadow-xl">
           <h2 className="text-white text-2xl font-bold mb-6">📊 TODAY'S MACROS</h2>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
