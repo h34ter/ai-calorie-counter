@@ -1,73 +1,56 @@
-import { put, head } from '@vercel/blob';
-import { NextApiRequest, NextApiResponse } from 'next';
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { put, get } from '@vercel/blob';
 
-const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN;
-
-if (!BLOB_TOKEN) {
-  console.warn('BLOB_READ_WRITE_TOKEN is not set');
+function key(userId: string) {
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  return `calorie-state/${userId}/${today}.json`;
 }
 
-function getUserKey(req: NextApiRequest): string {
-  const { user_id, date } = req.query;
-  
-  if (!user_id) {
-    throw new Error('user_id is required');
-  }
-  
-  // Use date-based storage format: user-state-{user_id}-{date}.json
-  const dateStr = date || new Date().toISOString().split('T')[0];
-  return `user-state-${user_id}-${dateStr}.json`;
-}
+const FORTY_EIGHT_HOURS = 48 * 60 * 60 * 1000;
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
-  try {
-    const userKey = getUserKey(req);
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const method = req.method || 'GET';
 
-    if (req.method === 'GET') {
-      // Try to fetch existing state
-      try {
-        const response = await fetch(
-          `https://blob.vercel-storage.com/${userKey}`,
-          {
-            headers: {
-              'Authorization': `Bearer ${BLOB_TOKEN}`,
-            },
-          }
-        );
-
-        if (!response.ok) {
-          if (response.status === 404) {
-            return res.status(200).json({ meals: [] });
-          }
-          throw new Error(`Failed to fetch: ${response.statusText}`);
-        }
-
-        const state = await response.json();
-        return res.status(200).json(state);
-      } catch (error) {
-        console.error('GET error:', error);
-        return res.status(200).json({ meals: [] });
+  if (method === 'GET') {
+    try {
+      const userId = (req.query.user_id as string) || 'anon';
+      const k = key(userId);
+      const file = await get(k);
+      if (!file) return res.status(200).json({ userConfig: null, meals: [] });
+      const json = await (await fetch(file.url, { cache: 'no-store' })).json();
+      if (json?.savedAt && Date.now() - json.savedAt > FORTY_EIGHT_HOURS) {
+        return res.status(200).json({ userConfig: null, meals: [] });
       }
-    } else if (req.method === 'POST') {
-      // Save state to Vercel Blob
-      const state = req.body;
-
-      const blob = await put(userKey, JSON.stringify(state), {
-        access: 'public',
-        token: BLOB_TOKEN,
-        contentType: 'application/json',
-      });
-
-      return res.status(200).json({ success: true, url: blob.url });
-    } else {
-      res.setHeader('Allow', ['GET', 'POST']);
-      return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
+      return res.status(200).json(json);
+    } catch {
+      return res.status(200).json({ userConfig: null, meals: [] });
     }
-  } catch (error) {
-    console.error('API error:', error);
-    return res.status(500).json({ error: 'Internal Server Error', message: error instanceof Error ? error.message : 'Unknown error' });
   }
+
+  if (method === 'POST') {
+    try {
+      const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      const userId = body?.user_id || 'anon';
+      const { userConfig, meals } = body || {};
+      const k = key(userId);
+
+      // Strip photos completely
+      const safeMeals = Array.isArray(meals)
+        ? meals.map((m: any) => ({ ...m, photos: [] }))
+        : [];
+
+      const payload = { userConfig, meals: safeMeals, savedAt: Date.now() };
+      await put(k, JSON.stringify(payload), {
+        contentType: 'application/json',
+        access: 'public',
+        addRandomSuffix: false,
+      });
+      return res.status(200).json({ ok: true });
+    } catch (e: any) {
+      return res.status(500).json({ ok: false, error: e?.message || 'save failed' });
+    }
+  }
+
+  res.setHeader('Allow', 'GET, POST');
+  return res.status(405).json({ error: 'Method not allowed' });
 }
