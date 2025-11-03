@@ -20,6 +20,28 @@ const formatFoodName = (key) => {
   ).join(' ').replace(/(\d+)/g, ' $1').trim();
 };
 
+// ---- Blob-backed daily persistence helpers (48h window, no photo persistence) ----
+const USER_ID = 'luis';
+
+const fetchState = async () => {
+  const res = await fetch(`/api/state?user_id=${encodeURIComponent(USER_ID)}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to load state');
+  return res.json();
+};
+
+let saveTimer = null;
+const saveState = async (userConfig, meals) => {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    await fetch('/api/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // API strips photos anyway; send as-is
+      body: JSON.stringify({ user_id: userConfig.user_id || USER_ID, userConfig, meals })
+    });
+  }, 400);
+};
+
 const NutritionTracker = () => {
   const [userConfig, setUserConfig] = useState(INITIAL_USER_CONFIG);
   const [currentDate, setCurrentDate] = useState(new Date().toISOString().split('T')[0]);
@@ -43,23 +65,26 @@ const NutritionTracker = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
 
-  // ---- PERSIST DATA TO LOCALSTORAGE ----
+  // ---- Load today's state from Blob on mount ----
   useEffect(() => {
-    const savedConfig = localStorage.getItem('userConfig');
-    const savedMeals = localStorage.getItem('meals');
-    if (savedConfig) setUserConfig(JSON.parse(savedConfig));
-    if (savedMeals) setMeals(JSON.parse(savedMeals));
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await fetchState();
+        if (cancelled) return;
+        if (data?.userConfig) setUserConfig(data.userConfig);
+        if (Array.isArray(data?.meals)) setMeals(data.meals);
+      } catch (e) {
+        // Optional: console.warn('Failed to load persisted state', e);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
-  // Save user config whenever it changes
+  // ---- Persist to Blob whenever config or meals change (debounced) ----
   useEffect(() => {
-    localStorage.setItem('userConfig', JSON.stringify(userConfig));
-  }, [userConfig]);
-
-  // Save meals whenever they change
-  useEffect(() => {
-    localStorage.setItem('meals', JSON.stringify(meals));
-  }, [meals]);
+    saveState(userConfig, meals);
+  }, [userConfig, meals]);
 
   const startCamera = async () => {
     try {
@@ -89,7 +114,7 @@ const NutritionTracker = () => {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0);
       canvas.toBlob(async (blob) => {
-        const photoUrl = URL.createObjectURL(blob);
+        const photoUrl = URL.createObjectURL(blob); // ephemeral for this session only
         const photoId = `photo_${Date.now()}`;
         const newPhoto = { id: photoId, url: photoUrl, timestamp: new Date().toISOString(), blob, analyzed: false };
         setNewMeal(prev => ({ ...prev, photos: [...prev.photos, newPhoto] }));
@@ -102,7 +127,7 @@ const NutritionTracker = () => {
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
     if (file && file.type.startsWith('image/')) {
-      const photoUrl = URL.createObjectURL(file);
+      const photoUrl = URL.createObjectURL(file); // ephemeral for this session only
       const photoId = `photo_${Date.now()}`;
       const newPhoto = { id: photoId, url: photoUrl, timestamp: new Date().toISOString(), blob: file, analyzed: false };
       setNewMeal(prev => ({ ...prev, photos: [...prev.photos, newPhoto] }));
@@ -121,10 +146,13 @@ const NutritionTracker = () => {
     setAnalysisError(null);
     try {
       const base64 = await new Promise((resolve) => {
+        if (!photo.blob) return resolve(null);
         const r = new FileReader();
         r.onload = () => resolve(r.result);
         r.readAsDataURL(photo.blob);
       });
+
+      if (!base64) throw new Error('Photo blob unavailable after refresh.');
 
       let prompt = `You are a professional nutritionist analyzing a food/nutrition image. Extract ALL visible information:
 1. If this is a nutrition label: extract ALL macros, serving size, and any micronutrients visible
@@ -176,7 +204,6 @@ Rules:
       });
 
       if (!response.ok) {
-        const txt = await response.text();
         throw new Error(`GPT-4 API error: ${response.status}`);
       }
 
@@ -184,8 +211,8 @@ Rules:
       let analysisText = data.choices?.[0]?.message?.content || '';
 
       let jsonText = analysisText.trim();
-      if (jsonText.includes('```json')) jsonText = jsonText.split('```json')[1].split('```')[0].trim();
-      else if (jsonText.includes('```')) jsonText = jsonText.split('```')[1].split('```')[0].trim();
+      if (jsonText.includes('``````json')[1].split('```
+      else if (jsonText.includes('```')) jsonText = jsonText.split('``````')[0].trim();
       jsonText = jsonText.replace(/^`+|`+$/g, '').trim();
 
       let parsed;
@@ -315,11 +342,11 @@ Rules:
 
   const calculateDailyTotals = () => {
     const dayMeals = meals.filter(meal =>
-      meal.timestamp.startsWith(currentDate) && !meal.correction_of_meal_id
+      meal.timestamp?.startsWith?.(currentDate) && !meal.correction_of_meal_id
     );
 
     const totals = dayMeals.reduce((daily, meal) => {
-      const mealTotals = calculateMealTotals(meal.items);
+      const mealTotals = calculateMealTotals(meal.items || []);
       return {
         kcal: daily.kcal + mealTotals.kcal,
         p: Math.round((daily.p + mealTotals.p) * 10) / 10,
@@ -341,9 +368,9 @@ Rules:
     const target_f_g = Math.round((userConfig.targets.daily_calories_kcal * userConfig.targets.macro_split_pct.fat / 100) / 9);
 
     const remaining_kcal = userConfig.targets.daily_calories_kcal - totals.kcal;
-    const remaining_p = target_p_g - totals.p;
-    const remaining_c = target_c_g - totals.c;
-    const remaining_f = target_f_g - totals.f;
+    const remaining_p = Math.round((target_p_g - totals.p) * 10) / 10;
+    const remaining_c = Math.round((target_c_g - totals.c) * 10) / 10;
+    const remaining_f = Math.round((target_f_g - totals.f) * 10) / 10;
 
     const protein_ok = Math.abs(p_pct - userConfig.targets.macro_split_pct.protein) <= 5;
     const carbs_ok = Math.abs(c_pct - userConfig.targets.macro_split_pct.carbs) <= 5;
@@ -367,7 +394,7 @@ Rules:
       title: newMeal.title,
       items: newMeal.items,
       notes: newMeal.notes,
-      photos: newMeal.photos,
+      photos: [], // ensure we do not keep photos in saved meals
       analysisResults: newMeal.analysisResults,
       source: 'manual'
     };
@@ -765,7 +792,7 @@ Rules:
             <h2 className="text-xl font-semibold text-gray-900">Today's Meals</h2>
 
             {dailyData.meals.map(meal => {
-              const mealTotals = calculateMealTotals(meal.items);
+              const mealTotals = calculateMealTotals(meal.items || []);
               return (
                 <div key={meal.id} className="border-l-4 border-green-500 pl-4 py-2 bg-green-50 rounded-r-lg">
                   <div className="flex items-center space-x-2 mb-2">
