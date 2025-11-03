@@ -20,11 +20,9 @@ const formatFoodName = (key) => {
   ).join(' ').replace(/(\d+)/g, ' $1').trim();
 };
 
-// ---- Blob-backed daily persistence helpers (48h window, no photo persistence) ----
-const USER_ID = 'luis';
-
-const fetchState = async () => {
-  const res = await fetch(`/api/state?user_id=${encodeURIComponent(USER_ID)}`, { cache: 'no-store' });
+// ---- Blob-backed daily persistence (48h, no photo persistence) ----
+const fetchState = async (userId) => {
+  const res = await fetch(`/api/state?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' });
   if (!res.ok) throw new Error('Failed to load state');
   return res.json();
 };
@@ -36,8 +34,7 @@ const saveState = async (userConfig, meals) => {
     await fetch('/api/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // API strips photos anyway; send as-is
-      body: JSON.stringify({ user_id: userConfig.user_id || USER_ID, userConfig, meals })
+      body: JSON.stringify({ user_id: userConfig.user_id || 'luis', userConfig, meals })
     });
   }, 400);
 };
@@ -65,23 +62,21 @@ const NutritionTracker = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
 
-  // ---- Load today's state from Blob on mount ----
+  // Load from Blob on mount
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const data = await fetchState();
+        const data = await fetchState(userConfig.user_id || 'luis');
         if (cancelled) return;
         if (data?.userConfig) setUserConfig(data.userConfig);
         if (Array.isArray(data?.meals)) setMeals(data.meals);
-      } catch (e) {
-        // Optional: console.warn('Failed to load persisted state', e);
-      }
+      } catch {}
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // ---- Persist to Blob whenever config or meals change (debounced) ----
+  // Save to Blob when config or meals change
   useEffect(() => {
     saveState(userConfig, meals);
   }, [userConfig, meals]);
@@ -114,7 +109,7 @@ const NutritionTracker = () => {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0);
       canvas.toBlob(async (blob) => {
-        const photoUrl = URL.createObjectURL(blob); // ephemeral for this session only
+        const photoUrl = URL.createObjectURL(blob); // session only
         const photoId = `photo_${Date.now()}`;
         const newPhoto = { id: photoId, url: photoUrl, timestamp: new Date().toISOString(), blob, analyzed: false };
         setNewMeal(prev => ({ ...prev, photos: [...prev.photos, newPhoto] }));
@@ -127,7 +122,7 @@ const NutritionTracker = () => {
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
     if (file && file.type.startsWith('image/')) {
-      const photoUrl = URL.createObjectURL(file); // ephemeral for this session only
+      const photoUrl = URL.createObjectURL(file); // session only
       const photoId = `photo_${Date.now()}`;
       const newPhoto = { id: photoId, url: photoUrl, timestamp: new Date().toISOString(), blob: file, analyzed: false };
       setNewMeal(prev => ({ ...prev, photos: [...prev.photos, newPhoto] }));
@@ -210,9 +205,19 @@ Rules:
       const data = await response.json();
       let analysisText = data.choices?.[0]?.message?.content || '';
 
+      // ---- CORRECT JSON BLOCK PARSE (fixes your compile error) ----
       let jsonText = analysisText.trim();
-      if (jsonText.includes('``````json')[1].split('```
-      else if (jsonText.includes('```')) jsonText = jsonText.split('``````')[0].trim();
+      if (jsonText.includes('```
+        const parts = jsonText.split('```json');
+        if (parts[1]) {
+          jsonText = parts[1].split('```
+        }
+      } else if (jsonText.includes('```')) {
+        const parts = jsonText.split('```
+        if (parts) {
+          jsonText = parts.split('```')[0].trim();
+        }
+      }
       jsonText = jsonText.replace(/^`+|`+$/g, '').trim();
 
       let parsed;
@@ -220,11 +225,8 @@ Rules:
         parsed = JSON.parse(jsonText);
       } catch (e) {
         const match = jsonText.match(/\{[\s\S]*\}/);
-        if (match) {
-          parsed = JSON.parse(match[0]);
-        } else {
-          throw new Error('Invalid JSON response');
-        }
+        if (match) parsed = JSON.parse(match[0]);
+        else throw new Error('Invalid JSON response');
       }
 
       const foods = parsed.foods || [];
@@ -394,7 +396,7 @@ Rules:
       title: newMeal.title,
       items: newMeal.items,
       notes: newMeal.notes,
-      photos: [], // ensure we do not keep photos in saved meals
+      photos: [], // do not persist photos
       analysisResults: newMeal.analysisResults,
       source: 'manual'
     };
@@ -448,26 +450,16 @@ Rules:
           </div>
         </div>
 
-        {/* HUGE MACROS DISPLAY */}
+        {/* BIG MACROS */}
         <div className="bg-gradient-to-br from-blue-900 to-indigo-900 p-8 rounded-2xl mb-8 shadow-xl">
           <h2 className="text-white text-2xl font-bold mb-6">📊 TODAY'S MACROS</h2>
-          
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-            {/* CALORIES */}
             <div className="bg-white/10 backdrop-blur p-6 rounded-xl border-2 border-white/30">
               <p className="text-white/80 text-sm font-semibold mb-2">CALORIES</p>
               <p className="text-white text-6xl font-black">{dailyData.totals.kcal}</p>
               <p className="text-white/70 text-xl mt-2">/ {dailyData.targets.kcal}</p>
               <p className="text-green-300 text-lg font-bold mt-2">{dailyData.remaining.kcal} left</p>
-              <button
-                onClick={() => setShowSettings(true)}
-                className="text-xs text-yellow-300 hover:text-yellow-100 mt-3 underline"
-              >
-                ✏️ Edit
-              </button>
             </div>
-
-            {/* PROTEIN */}
             <div className="bg-white/10 backdrop-blur p-6 rounded-xl border-2 border-green-400/30">
               <p className="text-green-200 text-sm font-semibold mb-2">PROTEIN</p>
               <p className="text-green-300 text-6xl font-black">{dailyData.totals.p}g</p>
@@ -476,8 +468,6 @@ Rules:
                 {dailyData.totals.p_pct}%
               </p>
             </div>
-
-            {/* CARBS */}
             <div className="bg-white/10 backdrop-blur p-6 rounded-xl border-2 border-purple-400/30">
               <p className="text-purple-200 text-sm font-semibold mb-2">CARBS</p>
               <p className="text-purple-300 text-6xl font-black">{dailyData.totals.c}g</p>
@@ -486,8 +476,6 @@ Rules:
                 {dailyData.totals.c_pct}%
               </p>
             </div>
-
-            {/* FAT */}
             <div className="bg-white/10 backdrop-blur p-6 rounded-xl border-2 border-orange-400/30">
               <p className="text-orange-200 text-sm font-semibold mb-2">FAT</p>
               <p className="text-orange-300 text-6xl font-black">{dailyData.totals.f}g</p>
