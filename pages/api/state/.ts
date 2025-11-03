@@ -1,8 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { put, get } from '@vercel/blob';
+import { put, list } from '@vercel/blob';
 
 function key(userId: string) {
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const today = new Date().toISOString().slice(0, 10);
   return `calorie-state/${userId}/${today}.json`;
 }
 
@@ -15,9 +15,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const userId = (req.query.user_id as string) || 'anon';
       const k = key(userId);
-      const file = await get(k);
-      if (!file) return res.status(200).json({ userConfig: null, meals: [] });
-      const json = await (await fetch(file.url, { cache: 'no-store' })).json();
+      
+      // List blobs matching the pattern
+      const { blobs } = await list({ prefix: k });
+      if (!blobs || blobs.length === 0) {
+        return res.status(200).json({ userConfig: null, meals: [] });
+      }
+
+      const blob = blobs[0];
+      const response = await fetch(blob.url, { cache: 'no-store' });
+      if (!response.ok) {
+        return res.status(200).json({ userConfig: null, meals: [] });
+      }
+
+      const json = await response.json();
       if (json?.savedAt && Date.now() - json.savedAt > FORTY_EIGHT_HOURS) {
         return res.status(200).json({ userConfig: null, meals: [] });
       }
